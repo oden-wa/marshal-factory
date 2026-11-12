@@ -1,5 +1,6 @@
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
+import { readFile } from "node:fs/promises";
 import { cpus, hostname, loadavg, totalmem } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -49,6 +50,21 @@ export function parseVmStat(output: string, totalBytes: number) {
   return { usedBytes, totalBytes };
 }
 
+/** Linux /proc/meminfo reports MemTotal and MemAvailable in KiB. */
+export function parseMeminfo(output: string) {
+  const kb = (name: string) => {
+    const match = new RegExp(`^${name}:\\s+(\\d+)\\s+kB$`, "m").exec(output);
+    if (!match) throw new Error(`/proc/meminfo has no "${name}" line`);
+    return Number(match[1]);
+  };
+  const totalKb = kb("MemTotal");
+  const availableKb = kb("MemAvailable");
+  if (!(totalKb > 0) || availableKb < 0 || availableKb > totalKb) {
+    throw new Error("/proc/meminfo reports invalid memory totals");
+  }
+  return { usedBytes: (totalKb - availableKb) * 1024, totalBytes: totalKb * 1024 };
+}
+
 export function parseDf(output: string) {
   const [header, row] = output.trim().split("\n");
   if (!header?.startsWith("Filesystem") || !header.includes("1024-blocks") || !row) throw new Error("df output has no 1024-blocks table");
@@ -65,10 +81,15 @@ export type InventoryCollectors = { [K in keyof Inventory]-?: () => Promise<Inve
 const settle = <T>(collect: () => Promise<T>) => collect().catch((): typeof UNKNOWN => UNKNOWN);
 
 export function systemCollectors(capacity: () => Promise<Heartbeat["capacity"]>): HeartbeatCollectors {
+  const isLinux = process.platform === "linux";
   return {
     cpu: async () => ({ load1: loadavg()[0]!, cores: cpus().length }),
-    memory: async () => parseVmStat(await text("vm_stat", []), totalmem()),
-    disk: async () => parseDf(await text("df", ["-k", "/System/Volumes/Data"])),
+    memory: async () =>
+      isLinux
+        ? parseMeminfo(await readFile("/proc/meminfo", "utf8"))
+        : parseVmStat(await text("vm_stat", []), totalmem()),
+    disk: async () =>
+      parseDf(await text("df", isLinux ? ["-P", "-k", "/"] : ["-k", "/System/Volumes/Data"])),
     capacity,
   };
 }

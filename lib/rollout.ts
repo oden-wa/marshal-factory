@@ -1,4 +1,5 @@
 import { existsSync, readFileSync } from "node:fs";
+import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { z } from "zod";
 import { CONFIG_PATH } from "./config";
@@ -8,6 +9,12 @@ import { CONFIG_PATH } from "./config";
 
 /** The last commit a rollout finished with, next to the config. */
 export const ROLLOUT_PATH = join(dirname(CONFIG_PATH), "rollout.json");
+
+/** Where the runner service writes its JSON log lines on this OS. */
+export const RUNNER_LOG_PATH =
+  process.platform === "linux"
+    ? join(homedir(), ".local/state/marshal-factory/runner.log")
+    : join(homedir(), "Library/Logs/marshal-factory/runner.log");
 
 export const rolloutSchema = z.object({ commit: z.string().min(1), at: z.string() });
 export type Rollout = z.infer<typeof rolloutSchema>;

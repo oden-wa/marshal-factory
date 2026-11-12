@@ -1,9 +1,9 @@
 import { execFileSync, spawnSync } from "node:child_process";
 import { chmodSync, closeSync, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, readSync, rmSync, statSync, writeFileSync } from "node:fs";
-import { homedir, tmpdir } from "node:os";
+import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { loadLimits } from "../lib/config";
-import { readRollout, ROLLOUT_PATH, startupVerdict, touchedInputs } from "../lib/rollout";
+import { readRollout, ROLLOUT_PATH, RUNNER_LOG_PATH, startupVerdict, touchedInputs } from "../lib/rollout";
 import { imageProblem, IMAGE_BUNDLES, readSandboxImage } from "../lib/sandbox";
 
 // Rolls merged main out to the live setup, in the order the parts depend on each other, and stops
@@ -28,7 +28,7 @@ const option = (name: string) => {
   return i >= 0 ? args[i + 1] : undefined;
 };
 const checkout = resolve(option("--checkout") ?? join(import.meta.dirname, ".."));
-const LOG_PATH = join(homedir(), "Library/Logs/marshal-factory/runner.log");
+const LOG_PATH = RUNNER_LOG_PATH;
 const ALREADY_STOPPED = "--runner-stopped";
 
 const t0 = Date.now();

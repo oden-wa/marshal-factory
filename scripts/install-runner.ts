@@ -2,48 +2,141 @@ import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir, userInfo } from "node:os";
 import { dirname, join } from "node:path";
+import { RUNNER_LOG_PATH } from "../lib/rollout";
 
-// Installs the runner as a launchd LaunchAgent: started at login, restarted when it exits, logging
-// to ~/Library/Logs/marshal-factory/runner.log. Re-running with nothing changed leaves it alone.
+// Installs the runner as a background user service (launchd on macOS, systemd --user on Linux):
+// started on boot/login, restarted when it exits, logging to RUNNER_LOG_PATH.
+// Re-running with nothing changed leaves it alone.
 //   bun scripts/install-runner.ts [--uninstall]
 
 export const LABEL = "com.marshal-factory.runner";
+export const SYSTEMD_UNIT = "marshal-factory-runner.service";
 const root = join(import.meta.dirname, "..");
-const plistPath = join(homedir(), "Library/LaunchAgents", `${LABEL}.plist`);
-const logPath = join(homedir(), "Library/Logs/marshal-factory/runner.log");
-const domain = `gui/${userInfo().uid}`;
+const logPath = RUNNER_LOG_PATH;
 
 const which = (bin: string) => execFileSync("/usr/bin/which", [bin], { encoding: "utf8" }).trim();
-const launchctl = (...args: string[]) => execFileSync("/bin/launchctl", args, { encoding: "utf8", stdio: "pipe" });
-const loaded = () => {
+const whichOptional = (bin: string) => {
   try {
-    launchctl("print", `${domain}/${LABEL}`);
-    return true;
+    return which(bin);
   } catch {
-    return false;
+    return undefined;
   }
 };
 
-if (process.argv.includes("--uninstall")) {
-  if (loaded()) launchctl("bootout", `${domain}/${LABEL}`);
-  console.log(`unloaded  ${LABEL}; ${plistPath} left in place`);
-  process.exit(0);
+function resolvePaths() {
+  const bun = which("bun");
+  const git = which("git");
+  const extras = ["gh", "claude", "codex", "uv"]
+    .map(whichOptional)
+    .filter((p): p is string => Boolean(p));
+  const t3 =
+    process.env.T3CODE_CLI_PATH ??
+    [join(homedir(), ".t3/bin/t3"), join(homedir(), ".local/bin/t3")].find(existsSync) ??
+    which("t3");
+  const path = [
+    ...new Set([
+      ...[bun, git, t3, ...extras].map(dirname),
+      join(homedir(), ".local/bin"),
+      "/usr/local/bin",
+      "/usr/bin",
+      "/bin",
+      "/usr/sbin",
+      "/sbin",
+    ]),
+  ].join(":");
+  return { bun, t3, path };
 }
 
-// launchd starts with a bare PATH, so carry the directories of every tool the runner calls.
-const tools = ["bun", "git"].map(which);
-// T3 exports its CLI path only to sessions it starts; the daemon gets it from here.
-// T3 installs its launcher at ~/.t3/bin/t3 and puts it on the login shell's PATH; launchd has neither.
-const t3 = process.env.T3CODE_CLI_PATH ?? [join(homedir(), ".t3/bin/t3")].find(existsSync) ?? which("t3");
-const path = [...new Set([...tools.map(dirname), "/usr/bin", "/bin", "/usr/sbin", "/sbin"])].join(":");
-const escape = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-const plist = `<?xml version="1.0" encoding="UTF-8"?>
+function runLinux(uninstall: boolean) {
+  const uid = userInfo().uid;
+  const unitPath = join(homedir(), ".config/systemd/user", SYSTEMD_UNIT);
+  const env = {
+    ...process.env,
+    XDG_RUNTIME_DIR: process.env.XDG_RUNTIME_DIR ?? `/run/user/${uid}`,
+  };
+  const systemctl = (...args: string[]) =>
+    execFileSync("systemctl", ["--user", ...args], { encoding: "utf8", stdio: "pipe", env });
+  const isActive = () => {
+    try {
+      return systemctl("is-active", SYSTEMD_UNIT).trim() === "active";
+    } catch {
+      return false;
+    }
+  };
+
+  if (uninstall) {
+    try {
+      systemctl("disable", "--now", SYSTEMD_UNIT);
+    } catch {
+      // Already unloaded or not yet installed.
+    }
+    console.log(`unloaded  ${SYSTEMD_UNIT}; ${unitPath} left in place`);
+    return;
+  }
+
+  const { bun, t3, path } = resolvePaths();
+  const unit = `[Unit]
+Description=Marshal Factory Runner
+After=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=${root}
+Environment="PATH=${path}"
+Environment="HOME=${homedir()}"
+Environment="T3CODE_CLI_PATH=${t3}"
+ExecStart=${bun} ${join(root, "runner/index.ts")}
+Restart=always
+RestartSec=10
+StandardOutput=append:${logPath}
+StandardError=append:${logPath}
+
+[Install]
+WantedBy=default.target
+`;
+
+  mkdirSync(dirname(unitPath), { recursive: true });
+  mkdirSync(dirname(logPath), { recursive: true });
+  const changed = !existsSync(unitPath) || readFileSync(unitPath, "utf8") !== unit;
+  if (changed) writeFileSync(unitPath, unit);
+  systemctl("daemon-reload");
+  const wasActive = isActive();
+  if (changed || !wasActive) {
+    systemctl("enable", SYSTEMD_UNIT);
+    systemctl("restart", SYSTEMD_UNIT);
+  }
+  console.log(`${changed ? "installed" : wasActive ? "unchanged" : "loaded"} ${SYSTEMD_UNIT}; log ${logPath}`);
+}
+
+function runDarwin(uninstall: boolean) {
+  const plistPath = join(homedir(), "Library/LaunchAgents", `${LABEL}.plist`);
+  const domain = `gui/${userInfo().uid}`;
+  const launchctl = (...args: string[]) =>
+    execFileSync("/bin/launchctl", args, { encoding: "utf8", stdio: "pipe" });
+  const loaded = () => {
+    try {
+      launchctl("print", `${domain}/${LABEL}`);
+      return true;
+    } catch {
+      return false;
+    }
+  };
+
+  if (uninstall) {
+    if (loaded()) launchctl("bootout", `${domain}/${LABEL}`);
+    console.log(`unloaded  ${LABEL}; ${plistPath} left in place`);
+    return;
+  }
+
+  const { bun, t3, path } = resolvePaths();
+  const escape = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  const plist = `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
   <key>Label</key><string>${LABEL}</string>
   <key>ProgramArguments</key>
-  <array><string>${escape(tools[0]!)}</string><string>${escape(join(root, "runner/index.ts"))}</string></array>
+  <array><string>${escape(bun)}</string><string>${escape(join(root, "runner/index.ts"))}</string></array>
   <key>WorkingDirectory</key><string>${escape(root)}</string>
   <key>EnvironmentVariables</key>
   <dict>
@@ -60,15 +153,19 @@ const plist = `<?xml version="1.0" encoding="UTF-8"?>
 </plist>
 `;
 
-mkdirSync(dirname(plistPath), { recursive: true });
-mkdirSync(dirname(logPath), { recursive: true });
-const changed = !existsSync(plistPath) || readFileSync(plistPath, "utf8") !== plist;
-if (changed) writeFileSync(plistPath, plist);
-if (changed && loaded()) {
-  launchctl("bootout", `${domain}/${LABEL}`);
-  // bootout returns before the old process is gone; bootstrap fails until it is.
-  for (let i = 0; i < 50 && loaded(); i++) execFileSync("/bin/sleep", ["0.2"]);
+  mkdirSync(dirname(plistPath), { recursive: true });
+  mkdirSync(dirname(logPath), { recursive: true });
+  const changed = !existsSync(plistPath) || readFileSync(plistPath, "utf8") !== plist;
+  if (changed) writeFileSync(plistPath, plist);
+  if (changed && loaded()) {
+    launchctl("bootout", `${domain}/${LABEL}`);
+    for (let i = 0; i < 50 && loaded(); i++) execFileSync("/bin/sleep", ["0.2"]);
+  }
+  const wasLoaded = loaded();
+  if (changed || !wasLoaded) launchctl("bootstrap", domain, plistPath);
+  console.log(`${changed ? "installed" : wasLoaded ? "unchanged" : "loaded"} ${LABEL}; log ${logPath}`);
 }
-const wasLoaded = loaded();
-if (changed || !wasLoaded) launchctl("bootstrap", domain, plistPath);
-console.log(`${changed ? "installed" : wasLoaded ? "unchanged" : "loaded"} ${LABEL}; log ${logPath}`);
+
+const uninstall = process.argv.includes("--uninstall");
+if (process.platform === "linux") runLinux(uninstall);
+else runDarwin(uninstall);
