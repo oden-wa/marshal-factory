@@ -75,6 +75,9 @@ function runLinux(uninstall: boolean) {
   }
 
   const { bun, t3, path } = resolvePaths();
+  const localCodexHome = join(homedir(), ".codex-factory-local");
+  const codexHome = process.env.CODEX_HOME ?? (existsSync(localCodexHome) ? localCodexHome : undefined);
+  const codexEnv = codexHome ? `Environment="CODEX_HOME=${codexHome}"\n` : "";
   const unit = `[Unit]
 Description=Marshal Factory Runner
 After=network-online.target
@@ -85,7 +88,7 @@ WorkingDirectory=${root}
 Environment="PATH=${path}"
 Environment="HOME=${homedir()}"
 Environment="T3CODE_CLI_PATH=${t3}"
-ExecStart=${bun} ${join(root, "runner/index.ts")}
+${codexEnv}ExecStart=${bun} ${join(root, "runner/index.ts")}
 Restart=always
 RestartSec=10
 StandardOutput=append:${logPath}
