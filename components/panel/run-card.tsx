@@ -5,6 +5,7 @@ import { Spinner } from "@/components/ui/spinner";
 import type { AgentRow, RunRow } from "@/db/schema";
 import type { SandboxState } from "@/lib/execution";
 import type { Tracking } from "@/lib/harness";
+import { isWebLink } from "@/lib/machine";
 import type { MergeDecision } from "@/lib/merge-decision";
 import { activityHref } from "@/lib/run-links";
 import { stopLine, type StopView } from "@/lib/stop";
@@ -107,7 +108,7 @@ export function StopLine({ view, t3Href }: { view: StopView; t3Href?: string }) 
       {view.kind === "stopping" && <Spinner className="size-2.5" />}
       {stopLine(view)}
       {view.kind === "unconfirmed" && t3Href && (
-        <a href={t3Href} className="relative inline-flex items-center gap-0.5 underline underline-offset-2">
+        <a href={t3Href} {...(isWebLink(t3Href) ? { target: "_blank", rel: "noreferrer" } : {})} className="relative inline-flex items-center gap-0.5 underline underline-offset-2">
           Open in T3
           <ExternalLinkIcon className="size-3" />
         </a>

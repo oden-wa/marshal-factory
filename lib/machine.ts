@@ -200,12 +200,24 @@ export function reportedSlack(machines: readonly { last_seen_at: Date; inventory
   return { configured: configured.length > 0, owner: configured.some((r) => r.owner) };
 }
 
+export const isWebLink = (href: string) => /^https?:\/\//i.test(href);
+
 /**
- * The deep link that opens a thread in T3 on the Mac that runs it. T3's desktop app maps
- * `t3code://threads/<environmentId>/<threadId>` to its `/$environmentId/$threadId` route; without
- * an environment id `t3code://app` only brings T3 to the front.
+ * The link that opens a thread in T3: `<webBaseUrl>/$environmentId/$threadId` when a T3 web UI URL
+ * is configured (`NEXT_PUBLIC_T3_WEB_URL`), or T3's desktop `t3code://threads/<environmentId>/<threadId>`
+ * deep link otherwise (`t3code://app` without an environment id only brings T3 to the front).
  */
-export function t3ThreadLink(threadId: string, environmentId: string | null) {
+export function t3ThreadLink(
+  threadId: string,
+  environmentId: string | null,
+  webBaseUrl = process.env.NEXT_PUBLIC_T3_WEB_URL,
+) {
+  const base = webBaseUrl?.trim().replace(/\/+$/, "");
+  if (base) {
+    return environmentId
+      ? `${base}/${encodeURIComponent(environmentId)}/${encodeURIComponent(threadId)}`
+      : base;
+  }
   return environmentId
     ? `t3code://threads/${encodeURIComponent(environmentId)}/${encodeURIComponent(threadId)}`
     : "t3code://app";

@@ -12,7 +12,7 @@ import { Separator } from "@/components/ui/separator";
 import type { AgentRow, AuditRow, EventRow, JobEvidenceRow, JobRow, MachineRow, RunRow } from "@/db/schema";
 import { sandboxState } from "@/lib/execution";
 import { harnessLabel, type Harness } from "@/lib/harness";
-import { parseInventory, t3ThreadLink, UNKNOWN } from "@/lib/machine";
+import { isWebLink, parseInventory, t3ThreadLink, UNKNOWN } from "@/lib/machine";
 import { sourceLink } from "@/lib/sources/shapes";
 import { parseStop, stopLine, stopView } from "@/lib/stop";
 import { runFeedPath } from "@/lib/run-links";
@@ -95,7 +95,7 @@ function ActionsMenu({
         )}
         {t3 &&
           ("href" in t3 ? (
-            <MenuLinkItem render={<a href={t3.href} />}>
+            <MenuLinkItem render={<a href={t3.href} {...(isWebLink(t3.href) ? { target: "_blank", rel: "noreferrer" } : {})} />}>
               <ExternalLinkIcon />
               {t3.label}
             </MenuLinkItem>
@@ -159,7 +159,7 @@ function StopBanner({ job, t3Href }: { job: JobRow; t3Href: string | null }) {
             <OpenSandboxT3 jobId={job.id} />
           ) : (
             t3Href && (
-              <Button render={<a href={t3Href} />} variant="outline" size="sm">
+              <Button render={<a href={t3Href} {...(isWebLink(t3Href) ? { target: "_blank", rel: "noreferrer" } : {})} />} variant="outline" size="sm">
                 Open in T3
                 <ExternalLinkIcon data-icon="inline-end" />
               </Button>
