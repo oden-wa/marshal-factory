@@ -112,10 +112,19 @@ export const factorySchema = z
   .prefault({});
 export type FactoryLimits = z.infer<typeof factorySchema>;
 
+export const agentsviewUrlSchema = z.url({ protocol: /^https?$/ })
+  .transform((value) => new URL(value))
+  .refine(
+    (url) => !url.username && !url.password && !/[?#]/.test(url.href),
+    "AgentsView URL must be an HTTP base URL without credentials, a query, or a fragment",
+  )
+  .transform((url) => url.href.replace(/\/+$/, ""));
+
 const configSchema = z.object({
   linearApiKey: z.string().min(1),
   ingestUrl: z.url(),
   secret: z.string().min(1),
+  agentsview: z.object({ url: agentsviewUrlSchema }).optional(),
   factory: factorySchema,
 });
 export type FactoryConfig = z.infer<typeof configSchema>;
