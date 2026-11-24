@@ -1,13 +1,16 @@
 import { drizzle } from "drizzle-orm/node-postgres";
 import { Pool } from "pg";
-import { databaseConnectionString } from "./connection";
 import * as schema from "./schema";
 
 const globalForPool = globalThis as unknown as { __pgPool?: Pool };
 
 function createPool() {
   const pool = new Pool({
-    connectionString: databaseConnectionString(process.env.DATABASE_URL!),
+    // Neon URLs say sslmode=require; verify-full keeps today's checks and skips pg's warning.
+    connectionString: process.env.DATABASE_URL!.replace(
+      "sslmode=require",
+      "sslmode=verify-full",
+    ),
     max: 5,
   });
   pool.on("error", (error) => console.error(error));

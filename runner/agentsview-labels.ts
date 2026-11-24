@@ -5,7 +5,6 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { Client } from "pg";
-import { databaseConnectionString } from "../db/connection";
 import { CLAUDE_SESSION_ID, type LabelRow } from "../lib/agentsview-labels";
 import { agentsviewUrlSchema, type FactoryConfig } from "../lib/config";
 import { stateDir } from "../lib/outbox";
@@ -57,7 +56,8 @@ const readCandidates: ReadPage = async (after, limit, checkTime, signal) => {
   if (!databaseUrl) throw new Error("DATABASE_URL is required for AgentsView labels");
   const timeout = checkTime();
   const client = new Client({
-    connectionString: databaseConnectionString(databaseUrl),
+    // Match the shared pool's certificate checks for Neon connection strings.
+    connectionString: databaseUrl.replace("sslmode=require", "sslmode=verify-full"),
     connectionTimeoutMillis: timeout,
     query_timeout: timeout,
   });
