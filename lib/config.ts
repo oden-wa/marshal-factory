@@ -116,6 +116,13 @@ const configSchema = z.object({
   linearApiKey: z.string().min(1),
   ingestUrl: z.url(),
   secret: z.string().min(1),
+  agentsview: z.object({
+    url: z.url({ protocol: /^https?$/ }).refine((value) => {
+      if (!URL.canParse(value)) return false;
+      const url = new URL(value);
+      return !url.username && !url.password && !/[?#]/.test(url.href);
+    }, "AgentsView URL must be an HTTP base URL without credentials, a query, or a fragment"),
+  }).optional(),
   factory: factorySchema,
 });
 export type FactoryConfig = z.infer<typeof configSchema>;

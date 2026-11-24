@@ -1,0 +1,261 @@
+import { Database } from "bun:sqlite";
+import { statSync } from "node:fs";
+import { join } from "node:path";
+import { Client } from "pg";
+import { attributionLabels, CLAUDE_SESSION_ID, labelCandidate, resolveAttribution, type Attribution, type LabelRow } from "../lib/agentsview-labels";
+import type { FactoryConfig } from "../lib/config";
+import { stateDir } from "../lib/outbox";
+
+const PAGE_SIZE = 25;
+const TICK_MS = 10_000;
+const HTTP_MS = 3_000;
+const WINDOW_MS = 7 * 86_400_000;
+
+type Cursor = { session: string; agent: string };
+type ReadPage = (after: Cursor, limit: number, checkTime: () => number, signal: AbortSignal) => Promise<LabelRow[]>;
+const start: Cursor = { session: "", agent: "" };
+
+class DeadlineExceeded extends Error {
+  constructor() {
+    super("AgentsView label tick deadline exceeded");
+  }
+}
+
+const candidatesSql = `
+  SELECT r.session_id, r.job_key, r.branch, target.agent_id
+  FROM runs r
+  JOIN jobs j ON j.key = r.job_key
+  CROSS JOIN LATERAL (
+    SELECT NULL::text AS agent_id
+    UNION ALL
+    SELECT a.agent_id FROM agents a
+    WHERE a.session_id = r.session_id AND a.agent_id <> '' AND a.agent_id NOT LIKE 'codex:%'
+  ) target
+  WHERE r.last_event_at >= $1 AND r.session_id >= $2 AND r.session_id ~ $4
+    AND (r.session_id, coalesce(target.agent_id, '')) > ($2, $3)
+  ORDER BY r.session_id, coalesce(target.agent_id, '')
+  LIMIT $5
+`;
+
+const readCandidates: ReadPage = async (after, limit, checkTime, signal) => {
+  const databaseUrl = process.env.DATABASE_URL;
+  if (!databaseUrl) throw new Error("DATABASE_URL is required for AgentsView labels");
+  const timeout = checkTime();
+  const client = new Client({
+    connectionString: databaseUrl.replace("sslmode=require", "sslmode=verify-full"),
+    connectionTimeoutMillis: timeout,
+    query_timeout: timeout,
+  });
+  let closing: Promise<void> | undefined;
+  const close = () => (closing ??= client.end().catch(() => undefined));
+  const onAbort = () => void close();
+  // A connection error between queries still has a listener.
+  client.on("error", onAbort);
+  signal.addEventListener("abort", onAbort, { once: true });
+  try {
+    await client.connect();
+    checkTime();
+    await client.query("BEGIN READ ONLY");
+    await client.query(`SET LOCAL statement_timeout = ${checkTime()}`);
+    checkTime();
+    const { rows } = await client.query<LabelRow>(candidatesSql, [
+      new Date(Date.now() - WINDOW_MS), after.session, after.agent, CLAUDE_SESSION_ID.source, limit,
+    ]);
+    checkTime();
+    await client.query("ROLLBACK");
+    return rows;
+  } finally {
+    signal.removeEventListener("abort", onAbort);
+    void close();
+  }
+};
+
+async function readBeforeDeadline(readPage: ReadPage, after: Cursor, checkTime: () => number) {
+  const timeout = checkTime();
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(new DeadlineExceeded()), timeout);
+  const expired = new Promise<never>((_, reject) => {
+    controller.signal.addEventListener("abort", () => reject(controller.signal.reason), { once: true });
+  });
+  try {
+    return await Promise.race([expired, readPage(after, PAGE_SIZE + 1, checkTime, controller.signal)]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+const schema = `
+  CREATE TABLE endpoint (
+    singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+    url TEXT NOT NULL
+  ) STRICT;
+  CREATE TABLE attributions (
+    session_id TEXT PRIMARY KEY NOT NULL,
+    job TEXT NOT NULL,
+    attempt INTEGER CHECK (attempt BETWEEN 1 AND 9007199254740991)
+  ) STRICT;
+  CREATE TABLE targets (
+    id TEXT PRIMARY KEY NOT NULL,
+    session_id TEXT NOT NULL REFERENCES attributions(session_id)
+  ) STRICT;
+`;
+
+function openState(path: string, url: string, empty: boolean, checkTime: () => number) {
+  const db = new Database(path, { create: false });
+  try {
+    db.exec("PRAGMA busy_timeout = 0; PRAGMA foreign_keys = ON; PRAGMA synchronous = FULL");
+    checkTime();
+    if (empty) {
+      db.transaction(() => {
+        checkTime();
+        db.exec(schema);
+        checkTime();
+        db.query("INSERT INTO endpoint (singleton, url) VALUES (1, ?)").run(url);
+        checkTime();
+      }).immediate();
+    }
+    checkTime();
+    const integrity = db.query<{ quick_check: string }>("PRAGMA quick_check(1)").get();
+    if (integrity?.quick_check !== "ok") throw new Error("AgentsView label state failed SQLite quick_check");
+    checkTime();
+    const endpoint = db.query<{ url: string }>("SELECT url FROM endpoint WHERE singleton = 1").get();
+    if (endpoint?.url !== url) throw new Error("AgentsView label state URL does not match agentsview.url");
+    return db;
+  } catch (error) {
+    db.close();
+    throw error;
+  }
+}
+
+function prepareTarget(db: Database, checkTime: () => number) {
+  const getAttribution = db.query<Attribution>("SELECT job, attempt FROM attributions WHERE session_id = ?");
+  const saveAttribution = db.query(`
+    INSERT INTO attributions (session_id, job, attempt) VALUES (?, ?, ?)
+    ON CONFLICT (session_id) DO UPDATE SET attempt = excluded.attempt
+  `);
+  const getOwner = db.query<{ session_id: string }>("SELECT session_id FROM targets WHERE id = ?");
+  const saveOwner = db.query("INSERT INTO targets (id, session_id) VALUES (?, ?)");
+  return ({ id, session, attribution }: NonNullable<ReturnType<typeof labelCandidate>>) => db.transaction(() => {
+    const saved = getAttribution.get(session);
+    const resolved = resolveAttribution(saved, attribution);
+    if (!resolved) return { kind: "conflict", conflict: "attribution", saved, observed: attribution } as const;
+    const owner = getOwner.get(id);
+    checkTime();
+    if (resolved !== saved) saveAttribution.run(session, resolved.job, resolved.attempt);
+    if (!owner) {
+      checkTime();
+      saveOwner.run(id, session);
+    }
+    checkTime();
+    if (owner && owner.session_id !== session) return { kind: "conflict", conflict: "target owner", owner: owner.session_id } as const;
+    return { kind: "send", labels: attributionLabels(resolved) } as const;
+  }).immediate();
+}
+
+type LabelIssue = { id: string; session: string; conflict: string } | { id: string; session: string; error: string };
+type LabelResult = {
+  sent: number;
+  failed: number;
+  conflicts: number;
+  timedOut: boolean;
+  issues: LabelIssue[];
+  error?: string;
+};
+
+type LabelOptions = {
+  path?: string;
+  readPage?: ReadPage;
+  send?: (url: string, init: RequestInit) => Promise<Response>;
+  now?: () => number;
+};
+
+export function createSessionLabelSync(
+  config: FactoryConfig["agentsview"],
+  options: LabelOptions = {},
+): () => Promise<LabelResult | { disabled: true }> {
+  if (!config) return async () => ({ disabled: true });
+  const endpoint = new URL(config.url);
+  const url = endpoint.href.replace(/\/+$/, "");
+  const {
+    path = join(stateDir(), "agentsview-labels.sqlite"),
+    readPage = readCandidates,
+    send = fetch,
+    now = () => performance.now(),
+  } = options;
+  const acknowledged = new Map<string, string>();
+  let after = start;
+  let initialized = false;
+
+  return async (): Promise<LabelResult> => {
+    const deadline = now() + TICK_MS;
+    const checkTime = () => {
+      const remaining = Math.floor(deadline - now());
+      if (remaining <= 0) throw new DeadlineExceeded();
+      return remaining;
+    };
+    const result: LabelResult = { sent: 0, failed: 0, conflicts: 0, timedOut: false, issues: [] };
+    let db: Database | undefined;
+    try {
+      const file = statSync(path);
+      if (!file.isFile() || (initialized && file.size === 0)) throw new Error("AgentsView label state is missing or empty");
+      const checkFile = (emptyAllowed: boolean) => {
+        const current = statSync(path);
+        if (current.ino !== file.ino || current.dev !== file.dev || (!emptyAllowed && current.size === 0)) {
+          throw new Error("AgentsView label state changed during the tick");
+        }
+      };
+      const page = await readBeforeDeadline(readPage, after, checkTime);
+      checkFile(file.size === 0);
+      checkTime();
+      db = openState(path, url, file.size === 0, checkTime);
+      initialized = true;
+      const plan = prepareTarget(db, checkTime);
+      for (const row of page.slice(0, PAGE_SIZE)) {
+        checkTime();
+        const candidate = labelCandidate(row);
+        if (candidate) {
+          checkFile(false);
+          const planned = plan(candidate);
+          const { id, session } = candidate;
+          if (planned.kind === "conflict") {
+            result.conflicts++;
+            result.issues.push({ id, session, ...planned });
+          } else {
+            const body = JSON.stringify({ add: planned.labels });
+            if (acknowledged.get(id) !== body) {
+              checkFile(false);
+              const timeout = checkTime();
+              try {
+                const response = await send(`${url}/api/v1/sessions/${encodeURIComponent(id)}/labels`, {
+                  method: "PATCH",
+                  headers: { "Content-Type": "application/json", Origin: endpoint.origin },
+                  body,
+                  redirect: "error",
+                  signal: AbortSignal.timeout(Math.min(HTTP_MS, timeout)),
+                });
+                void response.body?.cancel().catch(() => undefined);
+                if (!response.ok) throw new Error(`HTTP ${response.status}`);
+                acknowledged.set(id, body);
+                result.sent++;
+              } catch (error) {
+                result.failed++;
+                result.issues.push({ id, session, error: error instanceof Error ? error.message : String(error) });
+              }
+            }
+          }
+        }
+        after = { session: row.session_id, agent: row.agent_id ?? "" };
+      }
+      if (page.length <= PAGE_SIZE) after = start;
+      checkTime();
+    } catch (error) {
+      result.timedOut = error instanceof DeadlineExceeded || now() >= deadline || (
+        error instanceof Error && "code" in error && error.code === "57014"
+      );
+      if (!(error instanceof DeadlineExceeded)) result.error = error instanceof Error ? error.message : String(error);
+    } finally {
+      db?.close();
+    }
+    return result;
+  };
+}

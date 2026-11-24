@@ -18,6 +18,25 @@ Reference for how each part of the factory behaves once it is installed. For ins
 - **Merge conflicts.** A push to main makes the runner wait for GitHub to recompute mergeability, then read every open factory PR through the GitHub App. When a PR in stage `pr` turns conflicting, its thread is told to merge `origin/main`, resolve, rerun checks and report `pr` again, and the run moves back to Implementing. This happens once per PR head.
 - **Watchdog.** The runner's timer checks issues in a working stage. One that has been quiet for `stuckAfterMinutes`, or whose thread stopped and stayed quiet for `stoppedGraceMinutes`, gets one nudge asking the thread to continue and report its stage. If it is still stuck in the same stage `failAfterNudgeMinutes` later, the issue fails, Linear gets the reason, and the slot frees up. A thread T3 no longer has fails at once. Only Claude Code threads report activity as they work (usage snapshots), so a run on another harness (`jobs.provider`), Codex included, is never nudged or failed for being quiet; only a missing thread fails it.
 
+## Claude session labels in AgentsView
+
+Set the top-level `agentsview.url` in the runner config to enable session labels. One runner per AgentsView instance adds `mf.job` and, when verified, `mf.attempt` to Claude sessions and their subagents.
+
+For first use on EC2, check that the target AgentsView has no `mf.*` labels. Confirm that this runner is the only writer for that instance. As the runner user, create the empty attribution file once.
+
+```sh
+state_dir="${FACTORY_STATE_DIR:-$HOME/.local/state/marshal-factory}"
+umask 077
+mkdir -p "$state_dir"
+(set -C; : > "$state_dir/agentsview-labels.sqlite")
+```
+
+Add `"agentsview": { "url": "http://127.0.0.1:8090" }` to the runner config and restart the runner. It initializes the file and records the URL before sending labels.
+
+Back up `agentsview-labels.sqlite` with SQLite's backup command or copy it after a clean runner stop. Keep the backup with the corresponding AgentsView instance. If the file is lost, corrupt, or belongs to another URL, stop the runner and restore the matching record. Compare the saved `targets` and `attributions` with the instance's existing `mf.*` labels before restarting. If the record is unavailable, leave `agentsview.url` unset while you reconcile the existing labels. An empty file is reserved for first use.
+
+In the runner log, check `sessionLabels` on `reconcile` and `tick` results. `conflicts` counts observations that disagree with a saved job, verified attempt, or target owner. The `issues` list names the IDs and the reason. Use `failed` and `issues` to check PATCH errors. The runner retries those targets when the scan returns to them, while each run remains in the seven-day window. `timedOut` marks a tick that ran out of its ten-second budget. An `error` on the step reports a candidate read or state file error.
+
 ## Sources
 
 A source is where jobs come from and where the factory reports back. Linear is the only one shipped; the runner, the panel and ingest reach it only through its adapter, by the job's `source`, so a new source (GitHub Issues, Slack) is a new adapter and nothing else.

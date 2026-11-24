@@ -36,9 +36,11 @@ const { advanceOnboarding, onboardRepo, repoPushed, requestRebuild } = await imp
 const { repoPushDetailSchema } = await import("../lib/webhooks");
 const { notifySlack, sendSlackTest, slackFromEnv } = await import("./slack");
 const { keepSubscribed } = await import("./realtime");
+const { createSessionLabelSync } = await import("./agentsview-labels");
 type IntentRow = typeof intents.$inferSelect;
 
 const machine = await thisMachine();
+const syncSessionLabels = createSessionLabelSync(ops.config.agentsview);
 
 const log = (event: string, detail: Record<string, unknown> = {}) =>
   console.log(JSON.stringify({ at: new Date().toISOString(), event, ...detail }));
@@ -213,6 +215,7 @@ async function tick() {
     pullRequests: await isolated(ops.checkPullRequests),
     // Before the merge decisions, so a run that just opened its PR is decided on its latest cost.
     reconciled: await isolated(ops.reconcileUsage),
+    sessionLabels: await isolated(syncSessionLabels),
     // After the PR check, so a merged or conflicting PR has already left pr.
     mergeDecisions: await isolated(() => decideMerges()),
     mainWatched: await isolated(() => watchMerges()),
