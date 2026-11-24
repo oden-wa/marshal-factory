@@ -20,7 +20,7 @@ Reference for how each part of the factory behaves once it is installed. For ins
 
 ## Claude session labels in AgentsView
 
-Set the top-level `agentsview.url` in the runner config to enable session labels. One runner per AgentsView instance adds `mf.job` and, when verified, `mf.attempt` to Claude sessions and their subagents.
+Set the top-level `agentsview.url` in the runner config to enable session labels. One runner per AgentsView instance adds `mf.job` and, when verified, `mf.attempt` to Claude sessions and their subagents. The session needs a UUID and a recorded Claude `SessionStart` hook event. A retry can change the job's provider without changing the attribution of an earlier session.
 
 For first use on EC2, check that the target AgentsView has no `mf.*` labels. Confirm that this runner is the only writer for that instance. Run the initializer once as the runner user, with the same `FACTORY_STATE_DIR` as the runner. The default is `~/.local/state/marshal-factory`.
 
@@ -32,7 +32,9 @@ The initializer creates `agentsview-labels.sqlite` with the URL and schema. It r
 
 Back up `agentsview-labels.sqlite` with SQLite's backup command or copy it after a clean runner stop. Keep the backup with the corresponding AgentsView instance. The label step stops on a missing, empty, corrupt, or mismatched attribution file. If that happens, stop the runner and restore the matching backup. Compare the saved `targets` and `attributions` with the instance's existing `mf.*` labels before restarting. If the backup is unavailable, leave `agentsview.url` unset while you reconcile the existing labels.
 
-In the runner log, check `sessionLabels` on `reconcile` and `tick` results. `conflicts` counts observations that disagree with a saved job, verified attempt, or target owner. The `issues` list names the IDs and the reason. Use `failed` and `issues` to check PATCH errors. The runner retries those targets when the scan returns to them, while each run remains in the seven-day window. `timedOut` marks a tick that ran out of its ten-second budget. An `error` on the step reports a candidate read or state file error.
+In the runner log, check `sessionLabels` on `reconcile` and `tick` results. `conflicts` counts observations that disagree with a saved job, verified attempt, or target owner. The `issues` list names the IDs and the reason. Use `failed` and `issues` to check PATCH errors. The runner retries those targets when the scan returns to them, while each run remains in the seven-day window. The runner can also resend the saved labels after evicting an ID from its bounded cache.
+
+`timedOut` marks a tick that ran out of its ten-second budget. The runner checks SQLite integrity in a separate process at startup and after external file changes. A later tick can use the result if the file still matches. The label step waits for verification before reading candidates or sending labels. An `error` on the step reports a candidate read or state file error.
 
 ## Sources
 

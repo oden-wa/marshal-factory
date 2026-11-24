@@ -1,6 +1,9 @@
 import { Database } from "bun:sqlite";
-import { linkSync, mkdirSync, mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { execFile } from "node:child_process";
+import { type BigIntStats, linkSync, mkdirSync, mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { promisify } from "node:util";
 import { Client } from "pg";
 import { attributionLabels, CLAUDE_SESSION_ID, labelCandidate, resolveAttribution, type Attribution, type LabelRow } from "../lib/agentsview-labels";
 import { agentsviewUrlSchema, type FactoryConfig } from "../lib/config";
@@ -10,7 +13,11 @@ const PAGE_SIZE = 25;
 const TICK_MS = 10_000;
 const HTTP_MS = 3_000;
 const WINDOW_MS = 7 * 86_400_000;
+const MAX_ACKNOWLEDGED = 4_096;
+const STATE_CHECK_MS = 60_000;
 const labelStatePath = () => join(stateDir(), "agentsview-labels.sqlite");
+const checkScript = fileURLToPath(new URL("./check-agentsview-label-state.ts", import.meta.url));
+const execFileAsync = promisify(execFile);
 
 type Cursor = { session: string; agent: string };
 type ReadPage = (after: Cursor, limit: number, checkTime: () => number, signal: AbortSignal) => Promise<LabelRow[]>;
@@ -22,6 +29,8 @@ class DeadlineExceeded extends Error {
   }
 }
 
+// hooks/report.ts hashes SessionStart events. The MCP reporter uses a mcp-start: prefix.
+// The job's provider can change between attempts, so classify the run from its own event.
 const candidatesSql = `
   SELECT r.session_id, r.job_key, r.branch, target.agent_id
   FROM runs r
@@ -33,6 +42,10 @@ const candidatesSql = `
     WHERE a.session_id = r.session_id AND a.agent_id <> '' AND a.agent_id NOT LIKE 'codex:%'
   ) target
   WHERE r.last_event_at >= $1 AND r.session_id >= $2 AND r.session_id ~ $4
+    AND EXISTS (
+      SELECT 1 FROM events e WHERE e.session_id = r.session_id
+        AND e.kind = 'session_start' AND e.event_id ~ '^[0-9a-f]{64}$'
+    )
     AND (r.session_id, coalesce(target.agent_id, '')) > ($2, $3)
   ORDER BY r.session_id, coalesce(target.agent_id, '')
   LIMIT $5
@@ -71,7 +84,7 @@ const readCandidates: ReadPage = async (after, limit, checkTime, signal) => {
   }
 };
 
-async function readBeforeDeadline(readPage: ReadPage, after: Cursor, checkTime: () => number) {
+async function beforeDeadline<T>(checkTime: () => number, work: (signal: AbortSignal) => Promise<T>): Promise<T> {
   const timeout = checkTime();
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(new DeadlineExceeded()), timeout);
@@ -79,7 +92,7 @@ async function readBeforeDeadline(readPage: ReadPage, after: Cursor, checkTime: 
     controller.signal.addEventListener("abort", () => reject(controller.signal.reason), { once: true });
   });
   try {
-    return await Promise.race([expired, readPage(after, PAGE_SIZE + 1, checkTime, controller.signal)]);
+    return await Promise.race([expired, work(controller.signal)]);
   } finally {
     clearTimeout(timer);
   }
@@ -134,13 +147,24 @@ export function initializeSessionLabelState(rawUrl: string, path = labelStatePat
   return path;
 }
 
+async function verifyState(path: string) {
+  await execFileAsync(process.execPath, [checkScript, path], { timeout: STATE_CHECK_MS, killSignal: "SIGKILL" });
+}
+
+function stateFile(path: string) {
+  const file = statSync(path, { bigint: true });
+  if (!file.isFile() || file.size === BigInt(0)) throw new Error("AgentsView label state is missing or empty");
+  return file;
+}
+
+const sameFile = (a: BigIntStats, b: BigIntStats) => a.ino === b.ino && a.dev === b.dev;
+const sameContents = (a: BigIntStats, b: BigIntStats) =>
+  sameFile(a, b) && a.size === b.size && a.mtimeNs === b.mtimeNs && a.ctimeNs === b.ctimeNs;
+
 function openState(path: string, url: string, checkTime: () => number) {
   const db = new Database(path, { create: false });
   try {
     db.exec("PRAGMA busy_timeout = 0; PRAGMA foreign_keys = ON; PRAGMA synchronous = FULL");
-    checkTime();
-    const integrity = db.query<{ quick_check: string }>("PRAGMA quick_check(1)").get();
-    if (integrity?.quick_check !== "ok") throw new Error("AgentsView label state failed SQLite quick_check");
     checkTime();
     const endpoint = db.query<{ url: string }>("SELECT url FROM endpoint WHERE singleton = 1").get();
     if (endpoint?.url !== url) throw new Error("AgentsView label state URL does not match agentsview.url");
@@ -164,6 +188,7 @@ function prepareTarget(db: Database, checkTime: () => number) {
     const resolved = resolveAttribution(saved, attribution);
     if (!resolved) return { kind: "conflict", conflict: "attribution", saved, observed: attribution } as const;
     const owner = getOwner.get(id);
+    if (owner && owner.session_id !== session) return { kind: "conflict", conflict: "target owner", owner: owner.session_id } as const;
     checkTime();
     if (resolved !== saved) saveAttribution.run(session, resolved.job, resolved.attempt);
     if (!owner) {
@@ -171,8 +196,7 @@ function prepareTarget(db: Database, checkTime: () => number) {
       saveOwner.run(id, session);
     }
     checkTime();
-    if (owner && owner.session_id !== session) return { kind: "conflict", conflict: "target owner", owner: owner.session_id } as const;
-    return { kind: "send", labels: attributionLabels(resolved) } as const;
+    return { kind: "send", labels: attributionLabels(resolved), changed: resolved !== saved || !owner } as const;
   }).immediate();
 }
 
@@ -191,6 +215,8 @@ type LabelOptions = {
   readPage?: ReadPage;
   send?: (url: string, init: RequestInit) => Promise<Response>;
   now?: () => number;
+  verifyState?: (path: string) => Promise<void>;
+  maxAcknowledged?: number;
 };
 
 export function createSessionLabelSync(
@@ -205,8 +231,11 @@ export function createSessionLabelSync(
     readPage = readCandidates,
     send = fetch,
     now = () => performance.now(),
+    verifyState: verify = verifyState,
+    maxAcknowledged = MAX_ACKNOWLEDGED,
   } = options;
   const acknowledged = new Map<string, string>();
+  let verified: { file: BigIntStats; result: Promise<boolean> } | undefined;
   let after = start;
 
   return async (): Promise<LabelResult> => {
@@ -219,19 +248,27 @@ export function createSessionLabelSync(
     const result: LabelResult = { sent: 0, failed: 0, conflicts: 0, timedOut: false, issues: [] };
     let db: Database | undefined;
     try {
-      const file = statSync(path);
-      if (!file.isFile() || file.size === 0) throw new Error("AgentsView label state is missing or empty");
+      const file = stateFile(path);
+      checkTime();
+      if (!verified || !sameContents(file, verified.file)) {
+        verified = { file, result: verify(path).then(() => true, () => false) };
+      }
+      const verification = verified;
+      if (!(await beforeDeadline(checkTime, () => verification.result))) {
+        verified = undefined;
+        throw new Error("AgentsView label state failed SQLite quick_check");
+      }
       const checkFile = () => {
-        const current = statSync(path);
-        if (current.ino !== file.ino || current.dev !== file.dev || current.size === 0) {
+        if (!sameContents(verification.file, stateFile(path))) {
           throw new Error("AgentsView label state changed during the tick");
         }
       };
       checkTime();
+      checkFile();
       db = openState(path, url, checkTime);
       const plan = prepareTarget(db, checkTime);
       checkFile();
-      const page = await readBeforeDeadline(readPage, after, checkTime);
+      const page = await beforeDeadline(checkTime, (signal) => readPage(after, PAGE_SIZE + 1, checkTime, signal));
       checkTime();
       checkFile();
       for (const row of page.slice(0, PAGE_SIZE)) {
@@ -245,6 +282,11 @@ export function createSessionLabelSync(
             result.conflicts++;
             result.issues.push({ id, session, ...planned });
           } else {
+            if (planned.changed) {
+              const current = stateFile(path);
+              if (!sameFile(verification.file, current)) throw new Error("AgentsView label state changed during the tick");
+              verification.file = current;
+            }
             const body = JSON.stringify({ add: planned.labels });
             if (acknowledged.get(id) !== body) {
               checkFile();
@@ -259,7 +301,12 @@ export function createSessionLabelSync(
                 });
                 void response.body?.cancel().catch(() => undefined);
                 if (!response.ok) throw new Error(`HTTP ${response.status}`);
+                acknowledged.delete(id);
                 acknowledged.set(id, body);
+                if (acknowledged.size > maxAcknowledged) {
+                  const oldest = acknowledged.keys().next().value;
+                  if (oldest !== undefined) acknowledged.delete(oldest);
+                }
                 result.sent++;
               } catch (error) {
                 result.failed++;

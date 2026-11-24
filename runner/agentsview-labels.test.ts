@@ -175,6 +175,94 @@ test("a child ID remains owned by its original parent after a restart", async ()
   expect(requests).toEqual([root(1), "agent-same-child", root(2)].map((id) => `/api/v1/sessions/${id}/labels`));
 });
 
+test("a rejected child cannot set its proposed parent's attempt", async () => {
+  const path = newState();
+  let rows = [row(1, { agent_id: "taken" }), row(2, { branch: null })];
+  const bodies: unknown[] = [];
+  const sync = createSessionLabelSync(endpoint, {
+    path,
+    readPage: async () => rows,
+    send: async (_url, { body }) => {
+      bodies.push(body);
+      return accepted();
+    },
+  });
+  expect(await sync()).toMatchObject({ sent: 2 });
+  rows = [row(2, { branch: "factory/FAC-61-a2", agent_id: "taken" })];
+  expect(await sync()).toMatchObject({ sent: 0, conflicts: 1 });
+  rows = [row(2, { branch: "factory/FAC-61-a3" })];
+  expect(await sync()).toMatchObject({ sent: 1, conflicts: 0 });
+  expect(bodies.at(-1)).toBe('{"add":["mf.job=FAC-61","mf.attempt=3"]}');
+});
+
+test("bounds acknowledged targets and safely resends the same labels after eviction", async () => {
+  const path = newState();
+  let rows = [row(1), row(2)];
+  const requests: { url: string; body: unknown }[] = [];
+  const sync = createSessionLabelSync(endpoint, {
+    path,
+    maxAcknowledged: 2,
+    readPage: async () => rows,
+    send: async (url, { body }) => {
+      requests.push({ url, body });
+      return accepted();
+    },
+  });
+  expect(await sync()).toMatchObject({ sent: 2 });
+  rows = [row(2), row(3)];
+  expect(await sync()).toMatchObject({ sent: 1 });
+  expect(await sync()).toMatchObject({ sent: 0 });
+  rows = [row(1)];
+  expect(await sync()).toMatchObject({ sent: 1 });
+  expect(requests.at(-1)).toEqual(requests[0]);
+});
+
+test("a slow integrity check leaves the tick without blocking reads on subsequent verified ticks", async () => {
+  const path = newState();
+  const validation = Promise.withResolvers<void>();
+  let now = 0;
+  let checks = 0;
+  let reads = 0;
+  const sync = createSessionLabelSync(endpoint, {
+    path,
+    now: () => now,
+    verifyState: () => {
+      checks++;
+      now += 10_000;
+      return validation.promise;
+    },
+    readPage: async () => {
+      reads++;
+      return [row()];
+    },
+    send: async () => accepted(),
+  });
+  expect(await sync()).toMatchObject({ sent: 0, timedOut: true });
+  expect(reads).toBe(0);
+  validation.resolve();
+  expect(await sync()).toMatchObject({ sent: 1, timedOut: false });
+  expect(await sync()).toMatchObject({ sent: 0, timedOut: false });
+  expect(checks).toBe(1);
+  expect(reads).toBe(2);
+});
+
+test("rechecks the attribution database after an external change before reading candidates", async () => {
+  const path = newState();
+  let reads = 0;
+  const sync = createSessionLabelSync(endpoint, {
+    path,
+    readPage: async () => {
+      reads++;
+      return [row()];
+    },
+    send: async () => accepted(),
+  });
+  expect(await sync()).toMatchObject({ sent: 1 });
+  writeFileSync(path, "not SQLite");
+  expect(await sync()).toMatchObject({ sent: 0, error: "AgentsView label state failed SQLite quick_check" });
+  expect(reads).toBe(1);
+});
+
 test("does not read or send while disabled or with missing, corrupt, or mismatched state", async () => {
   const path = unusedStatePath();
   let reads = 0;
