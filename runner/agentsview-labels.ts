@@ -176,6 +176,19 @@ type LabelOptions = {
   runState?: typeof runStateWorker;
 };
 
+type StateUpdate = Exclude<StateOperation, { kind: "prepare" }>
+  | { kind: "prepare"; rows: readonly LabelRow[]; hasMore: boolean };
+type PendingState = {
+  operation: StateUpdate;
+  reply: Promise<{ result: StateResult } | { error: unknown }>;
+};
+type PreparedPage = {
+  rows: readonly LabelRow[];
+  hasMore: boolean;
+  plans: StateResult["plans"];
+  next: number;
+};
+
 export function createSessionLabelSync(
   config: FactoryConfig["agentsview"],
   options: LabelOptions = {},
@@ -190,8 +203,10 @@ export function createSessionLabelSync(
     now = () => performance.now(),
     runState = runStateWorker,
   } = options;
-  let pendingState: Promise<{ result: StateResult } | { error: unknown }> | undefined;
+  let pendingState: PendingState | undefined;
   let trustedFile: StateFile | undefined;
+  let preparedPage: PreparedPage | undefined;
+  let unsavedReceipt: LabelReceipt | undefined;
   let changedOutsideRunner = false;
   let after = start;
   let activeTick: Promise<LabelResult> | undefined;
@@ -200,24 +215,29 @@ export function createSessionLabelSync(
     if (stateFile(path).version !== expected.version) throw new LabelStateChangedError();
   }
 
-  async function finishState(pending: NonNullable<typeof pendingState>, checkTime: () => number) {
+  async function finishState({ operation, reply: pending }: PendingState, checkTime: () => number) {
     // If the tick expires first, the next tick must check the same worker's result.
     const reply = await beforeDeadline(checkTime, () => pending);
     pendingState = undefined;
     if ("error" in reply) throw reply.error;
     checkFile(reply.result.file);
     trustedFile = reply.result.file;
+    if (operation.kind === "prepare") {
+      preparedPage = { rows: operation.rows, hasMore: operation.hasMore, plans: reply.result.plans, next: 0 };
+    }
+    if (operation.kind === "record") unsavedReceipt = undefined;
     checkTime();
-    return reply.result;
+    return reply.result.file;
   }
 
-  function updateState(operation: StateOperation, checkTime: () => number) {
+  function updateState(operation: StateUpdate, checkTime: () => number) {
     checkTime();
     const file = trustedFile ?? stateFile(path);
-    pendingState = runState({ path, url, file, operation }).then(
+    const reply = runState({ path, url, file, operation }).then(
       (result) => ({ result }),
       (error: unknown) => ({ error }),
     );
+    pendingState = { operation, reply };
     return finishState(pendingState, checkTime);
   }
 
@@ -232,20 +252,24 @@ export function createSessionLabelSync(
     try {
       if (changedOutsideRunner) throw new LabelStateChangedError();
       if (pendingState) await finishState(pendingState, checkTime);
-      const file = trustedFile ?? (await updateState({ kind: "inspect" }, checkTime)).file;
+      let file = trustedFile ?? await updateState({ kind: "inspect" }, checkTime);
       checkFile(file);
-      const page = await beforeDeadline(checkTime, (signal) => readPage(after, PAGE_SIZE + 1, checkTime, signal));
-      checkFile(file);
-      const rows = page.slice(0, PAGE_SIZE);
-      const prepared = rows.length > 0 ? await updateState({ kind: "prepare", rows }, checkTime) : { file, plans: [] };
-      const { plans } = prepared;
-      let sendFile = prepared.file;
-      for (const [index, row] of rows.entries()) {
+      if (unsavedReceipt) file = await updateState({ kind: "record", receipt: unsavedReceipt }, checkTime);
+      if (!preparedPage) {
+        const candidates = await beforeDeadline(checkTime, (signal) => readPage(after, PAGE_SIZE + 1, checkTime, signal));
+        checkFile(file);
+        if (candidates.length > 0) {
+          const rows = candidates.slice(0, PAGE_SIZE);
+          file = await updateState({ kind: "prepare", rows, hasMore: candidates.length > PAGE_SIZE }, checkTime);
+        }
+      }
+      const page = preparedPage;
+      while (page && page.next < page.rows.length) {
         checkTime();
-        const planned = plans[index];
-        let receipt: LabelReceipt | undefined;
+        const row = page.rows[page.next];
+        const planned = page.plans[page.next];
         if (planned) {
-          checkFile(sendFile);
+          checkFile(file);
           const { id, session } = planned;
           if (planned.kind === "conflict") {
             result.conflicts++;
@@ -263,7 +287,7 @@ export function createSessionLabelSync(
               });
               void response.body?.cancel().catch(() => undefined);
               if (!response.ok) throw new Error(`HTTP ${response.status}`);
-              receipt = { id, body };
+              unsavedReceipt = { id, body };
               result.sent++;
             } catch (error) {
               result.failed++;
@@ -272,9 +296,11 @@ export function createSessionLabelSync(
           }
         }
         after = { session: row.session_id, agent: row.agent_id ?? "" };
-        if (receipt) sendFile = (await updateState({ kind: "record", receipt }, checkTime)).file;
+        page.next++;
+        if (unsavedReceipt) file = await updateState({ kind: "record", receipt: unsavedReceipt }, checkTime);
       }
-      if (page.length <= PAGE_SIZE) after = start;
+      if (!page?.hasMore) after = start;
+      preparedPage = undefined;
       checkTime();
     } catch (error) {
       if (error instanceof LabelStateChangedError) changedOutsideRunner = true;

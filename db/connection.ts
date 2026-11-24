@@ -1,17 +1,13 @@
 export function databaseConnectionString(connectionString: string): string {
-  let url: URL;
-  try {
-    url = new URL(connectionString);
-  } catch {
-    // Let pg interpret socket paths and URLs with an omitted host.
-    return connectionString;
-  }
-  if (
-    url.searchParams.getAll("uselibpqcompat").at(-1) === "true" ||
-    url.searchParams.getAll("sslmode").at(-1) !== "require"
-  ) return connectionString;
+  const query = connectionString.indexOf("?");
+  const fragment = connectionString.indexOf("#");
+  if (query < 0 || (fragment >= 0 && fragment < query) || connectionString.startsWith("/")) return connectionString;
 
-  // Preserve pg's current default certificate checks when using a Neon URL.
-  url.searchParams.set("sslmode", "verify-full");
-  return url.href;
+  // Parse only the query so pg can still handle connection URLs with an omitted host.
+  const end = fragment < 0 ? connectionString.length : fragment;
+  const params = new URLSearchParams(connectionString.slice(query + 1, end).replace(/[\t\n\r]/g, ""));
+  if (params.getAll("sslmode").at(-1) !== "require") return connectionString;
+  // Keep the pool's certificate and hostname checks, including with libpq compatibility.
+  params.set("sslmode", "verify-full");
+  return connectionString.slice(0, query + 1) + params.toString() + connectionString.slice(end);
 }

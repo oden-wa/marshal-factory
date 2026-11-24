@@ -354,12 +354,16 @@ for (const operation of ["prepare", "record"]) {
   test(`resumes when SQLite commits ${operation} but its reply misses the tick`, async () => {
     let clock = 0;
     let sends = 0;
+    let reads = 0;
     const reply = Promise.withResolvers<StateResult>();
     let committed: StateResult | undefined;
     const sync = createSessionLabelSync(endpoint, {
       path: newState(),
       now: () => clock,
-      readPage: async () => [row()],
+      readPage: async () => {
+        reads++;
+        return [row()];
+      },
       send: async () => {
         sends++;
         return accepted();
@@ -381,8 +385,49 @@ for (const operation of ["prepare", "record"]) {
     reply.resolve(committed);
     expect(await sync()).toEqual({ sent: 1 - sent, failed: 0, conflicts: 0, timedOut: false, issues: [] });
     expect(sends).toBe(1);
+    expect(reads).toBe(1);
   });
 }
+
+test("records a PATCH accepted at the deadline before sending the next target", async () => {
+  let clock = 0;
+  let temporarilyUnavailable = true;
+  const path = newState();
+  const sent: string[] = [];
+  const sync = createSessionLabelSync(endpoint, {
+    path,
+    now: () => clock,
+    readPage: async ({ session }) => [row(1), row(2)].filter((item) => item.session_id > session),
+    runState: async (request) => {
+      if (request.operation.kind === "record" && temporarilyUnavailable) {
+        temporarilyUnavailable = false;
+        throw new Error("receipt storage unavailable");
+      }
+      return runStateOperation(request);
+    },
+    send: async (url) => {
+      const id = url.split("/").at(-2) ?? "";
+      sent.push(id);
+      if (id === root(1)) {
+        clock += 10_000;
+      } else {
+        const db = new Database(path, { readonly: true });
+        try {
+          expect(db.query("SELECT id FROM receipts WHERE id = ?").get(root(1))).toEqual({ id: root(1) });
+        } finally {
+          db.close();
+        }
+      }
+      return accepted();
+    },
+  });
+  expect(await sync()).toMatchObject({ sent: 1, timedOut: true });
+  expect(await sync()).toMatchObject({ sent: 0, error: "receipt storage unavailable" });
+  expect(sent).toEqual([root(1)]);
+  expect(await sync()).toMatchObject({ sent: 1, failed: 0, timedOut: false });
+  expect(await sync()).toMatchObject({ sent: 0, failed: 0 });
+  expect(sent).toEqual([root(1), root(2)]);
+});
 
 test("a late commit reply cannot make a restored backup trusted", async () => {
   const path = newState();
