@@ -1,10 +1,10 @@
 import { Database } from "bun:sqlite";
 import { afterEach, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { LabelRow } from "../lib/agentsview-labels";
-import { createSessionLabelSync } from "./agentsview-labels";
+import { createSessionLabelSync, initializeSessionLabelState } from "./agentsview-labels";
 
 declare const Bun: {
   serve(options: { hostname: string; port: number; fetch(request: Request): Response | Promise<Response> }):
@@ -17,19 +17,76 @@ afterEach(() => {
   for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
 });
 
-function newState() {
+function unusedStatePath() {
   const dir = mkdtempSync(join(tmpdir(), "marshal-label-test-"));
   dirs.push(dir);
-  const path = join(dir, "agentsview-labels.sqlite");
-  writeFileSync(path, "", { flag: "wx" });
-  return path;
+  return join(dir, "agentsview-labels.sqlite");
 }
+
+const newState = (url = endpoint.url) => initializeSessionLabelState(url, unusedStatePath());
 
 const root = (n: number) => `00000000-0000-0000-0000-${String(n).padStart(12, "0")}`;
 const row = (n = 1, rest: Partial<LabelRow> = {}): LabelRow => ({
   session_id: root(n), job_key: "FAC-61", branch: "factory/FAC-61", agent_id: null, ...rest,
 });
 const accepted = () => new Response(null, { status: 204 });
+
+test("refuses to read candidates or send a new attempt after a truncated state file and restart", async () => {
+  const labels = new Set<string>();
+  const server = Bun.serve({
+    hostname: "127.0.0.1",
+    port: 0,
+    async fetch(request) {
+      const body: { add: string[] } = await request.json();
+      for (const label of body.add) labels.add(label);
+      return accepted();
+    },
+  });
+  try {
+    const config = { url: server.url.href };
+    const path = newState(config.url);
+    let branch = "factory/FAC-61";
+    let reads = 0;
+    const restart = () => createSessionLabelSync(config, {
+      path,
+      readPage: async () => {
+        reads++;
+        return [row(1, { branch })];
+      },
+    });
+    expect(await restart()()).toMatchObject({ sent: 1 });
+    expect([...labels]).toEqual(["mf.job=FAC-61", "mf.attempt=1"]);
+    writeFileSync(path, "");
+    branch = "factory/FAC-61-a2";
+    const restarted = await restart()();
+    expect([...labels]).toEqual(["mf.job=FAC-61", "mf.attempt=1"]);
+    expect(restarted).toMatchObject({ sent: 0, error: "AgentsView label state is missing or empty" });
+    expect(reads).toBe(1);
+    expect(statSync(path).size).toBe(0);
+  } finally {
+    await server.stop(true);
+  }
+});
+
+test("the initializer refuses to replace either an empty file or an initialized database", () => {
+  const empty = unusedStatePath();
+  writeFileSync(empty, "");
+  expect(() => initializeSessionLabelState(endpoint.url, empty)).toThrow("already exists");
+  expect(statSync(empty).size).toBe(0);
+
+  const initialized = newState();
+  const original = readFileSync(initialized);
+  expect(() => initializeSessionLabelState("http://other.invalid", initialized)).toThrow("already exists");
+  expect(readFileSync(initialized)).toEqual(original);
+});
+
+test("the initializer rejects invalid URLs before creating state", () => {
+  const path = unusedStatePath();
+  for (const url of ["not a URL", "file:///tmp/agentsview", "http://user@agentsview.invalid", "http://agentsview.invalid/#"]) {
+    expect(() => initializeSessionLabelState(url, path)).toThrow();
+    expect(existsSync(path)).toBe(false);
+  }
+});
 
 test("commits attribution before sending and replays a lost response after restart", async () => {
   const path = newState();
@@ -118,9 +175,8 @@ test("a child ID remains owned by its original parent after a restart", async ()
   expect(requests).toEqual([root(1), "agent-same-child", root(2)].map((id) => `/api/v1/sessions/${id}/labels`));
 });
 
-test("does not send while disabled or with missing, corrupt, or mismatched state", async () => {
-  const path = newState();
-  rmSync(path);
+test("does not read or send while disabled or with missing, corrupt, or mismatched state", async () => {
+  const path = unusedStatePath();
   let reads = 0;
   let sent = 0;
   const options = {
@@ -140,16 +196,12 @@ test("does not send while disabled or with missing, corrupt, or mismatched state
   expect(existsSync(path)).toBe(false);
   writeFileSync(path, "not SQLite");
   expect("error" in await createSessionLabelSync(endpoint, options)()).toBe(true);
-  expect(sent).toBe(0);
-  writeFileSync(path, "");
-  const initialized = createSessionLabelSync(endpoint, options);
-  expect(await initialized()).toMatchObject({ sent: 1 });
-  expect(await createSessionLabelSync({ url: "http://other.invalid" }, options)()).toMatchObject({
+  const other = newState("http://other.invalid");
+  expect(await createSessionLabelSync(endpoint, { ...options, path: other })()).toMatchObject({
     sent: 0, error: "AgentsView label state URL does not match agentsview.url",
   });
-  writeFileSync(path, "");
-  expect(await initialized()).toMatchObject({ sent: 0, error: "AgentsView label state is missing or empty" });
-  expect(sent).toBe(1);
+  expect(reads).toBe(0);
+  expect(sent).toBe(0);
 });
 
 test("PATCH encodes the target and sends only add with the configured Origin", async () => {
@@ -169,7 +221,7 @@ test("PATCH encodes the target and sends only add with the configured Origin", a
   });
   try {
     const sync = createSessionLabelSync({ url: server.url.href }, {
-      path: newState(),
+      path: newState(server.url.origin),
       readPage: async () => [row(1, { agent_id: "id/with?space &" })],
     });
     expect(await sync()).toMatchObject({ sent: 1 });
@@ -208,26 +260,32 @@ test("moves past failures and a whole page of previously acknowledged targets", 
 
 test("a candidate read that misses the deadline is discarded even when it later returns", async () => {
   const path = newState();
+  const original = readFileSync(path);
   let firstTime = true;
   const { promise: pending, resolve: release } = Promise.withResolvers<LabelRow[]>();
+  let reads = 0;
   let sends = 0;
   const sync = createSessionLabelSync(endpoint, {
     path,
     now: () => {
-      const offset = firstTime ? 0 : 9_950;
+      const offset = firstTime ? 0 : 9_900;
       firstTime = false;
       return performance.now() + offset;
     },
-    readPage: () => pending,
+    readPage: () => {
+      reads++;
+      return pending;
+    },
     send: async () => {
       sends++;
       return accepted();
     },
   });
   expect(await sync()).toMatchObject({ sent: 0, timedOut: true });
+  expect(reads).toBe(1);
   release([row()]);
   await pending;
-  expect(statSync(path).size).toBe(0);
+  expect(readFileSync(path)).toEqual(original);
   expect(sends).toBe(0);
   expect(await sync()).toMatchObject({ sent: 1, timedOut: false });
 });
@@ -248,7 +306,7 @@ test("the candidate read and HTTP share a deadline and the next tick continues a
     const rows = [row(1), row(2)];
     let firstPage = true;
     const sync = createSessionLabelSync({ url: server.url.href }, {
-      path: newState(),
+      path: newState(server.url.origin),
       now: () => performance.now() + offset,
       readPage: async ({ session }) => {
         if (firstPage) offset += 9_800;

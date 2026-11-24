@@ -6,5 +6,6 @@ declare module "bun:test" {
     toEqual(expected: unknown): void;
     toMatchObject(expected: object): void;
     toHaveLength(expected: number): void;
+    toThrow(expected?: string): void;
   };
 }

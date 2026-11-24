@@ -1,15 +1,16 @@
 import { Database } from "bun:sqlite";
-import { statSync } from "node:fs";
-import { join } from "node:path";
+import { linkSync, mkdirSync, mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { Client } from "pg";
 import { attributionLabels, CLAUDE_SESSION_ID, labelCandidate, resolveAttribution, type Attribution, type LabelRow } from "../lib/agentsview-labels";
-import type { FactoryConfig } from "../lib/config";
+import { agentsviewUrlSchema, type FactoryConfig } from "../lib/config";
 import { stateDir } from "../lib/outbox";
 
 const PAGE_SIZE = 25;
 const TICK_MS = 10_000;
 const HTTP_MS = 3_000;
 const WINDOW_MS = 7 * 86_400_000;
+const labelStatePath = () => join(stateDir(), "agentsview-labels.sqlite");
 
 type Cursor = { session: string; agent: string };
 type ReadPage = (after: Cursor, limit: number, checkTime: () => number, signal: AbortSignal) => Promise<LabelRow[]>;
@@ -100,20 +101,43 @@ const schema = `
   ) STRICT;
 `;
 
-function openState(path: string, url: string, empty: boolean, checkTime: () => number) {
+export function initializeSessionLabelState(rawUrl: string, path = labelStatePath()) {
+  const url = agentsviewUrlSchema.parse(rawUrl);
+  const dir = dirname(path);
+  mkdirSync(dir, { recursive: true, mode: 0o700 });
+  const staging = mkdtempSync(join(dir, ".agentsview-labels-"));
+  try {
+    const fresh = join(staging, "labels.sqlite");
+    writeFileSync(fresh, "", { flag: "wx", mode: 0o600 });
+    const db = new Database(fresh, { create: false });
+    try {
+      db.exec("PRAGMA synchronous = FULL");
+      db.transaction(() => {
+        db.exec(schema);
+        db.query("INSERT INTO endpoint (singleton, url) VALUES (1, ?)").run(url);
+      }).immediate();
+    } finally {
+      db.close();
+    }
+    // Publish the committed database in one step. A hard link fails when the destination exists.
+    try {
+      linkSync(fresh, path);
+    } catch (error) {
+      if (error instanceof Error && "code" in error && error.code === "EEXIST") {
+        throw new Error(`AgentsView label state already exists at ${path}`);
+      }
+      throw error;
+    }
+  } finally {
+    rmSync(staging, { recursive: true, force: true });
+  }
+  return path;
+}
+
+function openState(path: string, url: string, checkTime: () => number) {
   const db = new Database(path, { create: false });
   try {
     db.exec("PRAGMA busy_timeout = 0; PRAGMA foreign_keys = ON; PRAGMA synchronous = FULL");
-    checkTime();
-    if (empty) {
-      db.transaction(() => {
-        checkTime();
-        db.exec(schema);
-        checkTime();
-        db.query("INSERT INTO endpoint (singleton, url) VALUES (1, ?)").run(url);
-        checkTime();
-      }).immediate();
-    }
     checkTime();
     const integrity = db.query<{ quick_check: string }>("PRAGMA quick_check(1)").get();
     if (integrity?.quick_check !== "ok") throw new Error("AgentsView label state failed SQLite quick_check");
@@ -174,17 +198,16 @@ export function createSessionLabelSync(
   options: LabelOptions = {},
 ): () => Promise<LabelResult | { disabled: true }> {
   if (!config) return async () => ({ disabled: true });
-  const endpoint = new URL(config.url);
-  const url = endpoint.href.replace(/\/+$/, "");
+  const url = agentsviewUrlSchema.parse(config.url);
+  const origin = new URL(url).origin;
   const {
-    path = join(stateDir(), "agentsview-labels.sqlite"),
+    path = labelStatePath(),
     readPage = readCandidates,
     send = fetch,
     now = () => performance.now(),
   } = options;
   const acknowledged = new Map<string, string>();
   let after = start;
-  let initialized = false;
 
   return async (): Promise<LabelResult> => {
     const deadline = now() + TICK_MS;
@@ -197,24 +220,25 @@ export function createSessionLabelSync(
     let db: Database | undefined;
     try {
       const file = statSync(path);
-      if (!file.isFile() || (initialized && file.size === 0)) throw new Error("AgentsView label state is missing or empty");
-      const checkFile = (emptyAllowed: boolean) => {
+      if (!file.isFile() || file.size === 0) throw new Error("AgentsView label state is missing or empty");
+      const checkFile = () => {
         const current = statSync(path);
-        if (current.ino !== file.ino || current.dev !== file.dev || (!emptyAllowed && current.size === 0)) {
+        if (current.ino !== file.ino || current.dev !== file.dev || current.size === 0) {
           throw new Error("AgentsView label state changed during the tick");
         }
       };
-      const page = await readBeforeDeadline(readPage, after, checkTime);
-      checkFile(file.size === 0);
       checkTime();
-      db = openState(path, url, file.size === 0, checkTime);
-      initialized = true;
+      db = openState(path, url, checkTime);
       const plan = prepareTarget(db, checkTime);
+      checkFile();
+      const page = await readBeforeDeadline(readPage, after, checkTime);
+      checkTime();
+      checkFile();
       for (const row of page.slice(0, PAGE_SIZE)) {
         checkTime();
         const candidate = labelCandidate(row);
         if (candidate) {
-          checkFile(false);
+          checkFile();
           const planned = plan(candidate);
           const { id, session } = candidate;
           if (planned.kind === "conflict") {
@@ -223,12 +247,12 @@ export function createSessionLabelSync(
           } else {
             const body = JSON.stringify({ add: planned.labels });
             if (acknowledged.get(id) !== body) {
-              checkFile(false);
+              checkFile();
               const timeout = checkTime();
               try {
                 const response = await send(`${url}/api/v1/sessions/${encodeURIComponent(id)}/labels`, {
                   method: "PATCH",
-                  headers: { "Content-Type": "application/json", Origin: endpoint.origin },
+                  headers: { "Content-Type": "application/json", Origin: origin },
                   body,
                   redirect: "error",
                   signal: AbortSignal.timeout(Math.min(HTTP_MS, timeout)),

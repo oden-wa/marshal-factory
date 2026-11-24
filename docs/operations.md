@@ -22,18 +22,15 @@ Reference for how each part of the factory behaves once it is installed. For ins
 
 Set the top-level `agentsview.url` in the runner config to enable session labels. One runner per AgentsView instance adds `mf.job` and, when verified, `mf.attempt` to Claude sessions and their subagents.
 
-For first use on EC2, check that the target AgentsView has no `mf.*` labels. Confirm that this runner is the only writer for that instance. As the runner user, create the empty attribution file once.
+For first use on EC2, check that the target AgentsView has no `mf.*` labels. Confirm that this runner is the only writer for that instance. Run the initializer once as the runner user, with the same `FACTORY_STATE_DIR` as the runner. The default is `~/.local/state/marshal-factory`.
 
 ```sh
-state_dir="${FACTORY_STATE_DIR:-$HOME/.local/state/marshal-factory}"
-umask 077
-mkdir -p "$state_dir"
-(set -C; : > "$state_dir/agentsview-labels.sqlite")
+bun scripts/init-agentsview-labels.ts http://127.0.0.1:8090
 ```
 
-Add `"agentsview": { "url": "http://127.0.0.1:8090" }` to the runner config and restart the runner. It initializes the file and records the URL before sending labels.
+The initializer creates `agentsview-labels.sqlite` with the URL and schema. It refuses any existing file. Add `"agentsview": { "url": "http://127.0.0.1:8090" }` to the runner config and restart the runner.
 
-Back up `agentsview-labels.sqlite` with SQLite's backup command or copy it after a clean runner stop. Keep the backup with the corresponding AgentsView instance. If the file is lost, corrupt, or belongs to another URL, stop the runner and restore the matching record. Compare the saved `targets` and `attributions` with the instance's existing `mf.*` labels before restarting. If the record is unavailable, leave `agentsview.url` unset while you reconcile the existing labels. An empty file is reserved for first use.
+Back up `agentsview-labels.sqlite` with SQLite's backup command or copy it after a clean runner stop. Keep the backup with the corresponding AgentsView instance. The label step stops on a missing, empty, corrupt, or mismatched attribution file. If that happens, stop the runner and restore the matching backup. Compare the saved `targets` and `attributions` with the instance's existing `mf.*` labels before restarting. If the backup is unavailable, leave `agentsview.url` unset while you reconcile the existing labels.
 
 In the runner log, check `sessionLabels` on `reconcile` and `tick` results. `conflicts` counts observations that disagree with a saved job, verified attempt, or target owner. The `issues` list names the IDs and the reason. Use `failed` and `issues` to check PATCH errors. The runner retries those targets when the scan returns to them, while each run remains in the seven-day window. `timedOut` marks a tick that ran out of its ten-second budget. An `error` on the step reports a candidate read or state file error.
 
