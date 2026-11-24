@@ -7,7 +7,7 @@ export type LabelReceipt = { id: string; body: string };
 export type StateOperation =
   | { kind: "inspect" }
   | { kind: "prepare"; rows: readonly LabelRow[] }
-  | { kind: "record"; receipts: readonly LabelReceipt[] };
+  | { kind: "record"; receipt: LabelReceipt };
 
 type LabelPlan = { id: string; session: string } & (
   | { kind: "send"; body: string; accepted: boolean }
@@ -16,7 +16,13 @@ type LabelPlan = { id: string; session: string } & (
 
 export type StateRequest = { path: string; url: string; file: StateFile; operation: StateOperation };
 export type StateResult = { file: StateFile; plans: (LabelPlan | null)[] };
-export type StateReply = { result: StateResult } | { error: string };
+export type StateReply = { result: StateResult } | { error: string; fileChanged: boolean };
+
+export class LabelStateChangedError extends Error {
+  constructor() {
+    super("AgentsView label state changed outside the runner. Reconcile the state and restart the runner");
+  }
+}
 
 export function stateFile(path: string): StateFile {
   const file = statSync(path, { bigint: true });
@@ -59,16 +65,15 @@ function prepare(db: Database, rows: readonly LabelRow[]): (LabelPlan | null)[] 
   });
 }
 
-function record(db: Database, receipts: readonly LabelReceipt[]) {
-  const save = db.query(`
+function record(db: Database, { id, body }: LabelReceipt) {
+  db.query(`
     INSERT INTO receipts (id, body) VALUES (?, ?)
     ON CONFLICT (id) DO UPDATE SET body = excluded.body
-  `);
-  for (const { id, body } of receipts) save.run(id, body);
+  `).run(id, body);
 }
 
 export function runStateOperation({ path, url, file, operation }: StateRequest): StateResult {
-  if (stateFile(path).version !== file.version) throw new Error("AgentsView label state changed during the tick");
+  if (stateFile(path).version !== file.version) throw new LabelStateChangedError();
   const db = new Database(path, { create: false });
   let plans: StateResult["plans"] = [];
   try {
@@ -84,12 +89,12 @@ export function runStateOperation({ path, url, file, operation }: StateRequest):
     if (operation.kind === "prepare") {
       plans = db.transaction(() => prepare(db, operation.rows)).immediate();
     } else if (operation.kind === "record") {
-      db.transaction(() => record(db, operation.receipts)).immediate();
+      db.transaction(() => record(db, operation.receipt)).immediate();
     }
   } finally {
     db.close();
   }
   const updated = stateFile(path);
-  if (updated.identity !== file.identity) throw new Error("AgentsView label state changed during the tick");
+  if (updated.identity !== file.identity) throw new LabelStateChangedError();
   return { file: updated, plans };
 }

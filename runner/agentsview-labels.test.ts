@@ -211,6 +211,30 @@ test("remembers successful PATCH requests across runner restarts", async () => {
   expect(sent).toBe(2);
 });
 
+test("records an accepted PATCH before the next request can use the rest of the tick", async () => {
+  const path = newState();
+  let clock = 0;
+  const sync = createSessionLabelSync(endpoint, {
+    path,
+    now: () => clock,
+    readPage: async () => [row(1), row(2)],
+    send: async (url) => {
+      if (url.includes(root(2))) {
+        clock = 10_000;
+        throw new Error("deadline");
+      }
+      return accepted();
+    },
+  });
+  expect(await sync()).toMatchObject({ sent: 1, failed: 1, timedOut: true });
+  const restarted = createSessionLabelSync(endpoint, {
+    path,
+    readPage: async () => [row(1)],
+    send: async () => { throw new Error("a successful PATCH should not be retried"); },
+  });
+  expect(await restarted()).toMatchObject({ sent: 0, failed: 0 });
+});
+
 test("a slow integrity check leaves the tick without blocking reads on subsequent verified ticks", async () => {
   const path = newState();
   const validation = Promise.withResolvers<void>();
@@ -275,6 +299,27 @@ test("rejects a valid replacement file while the runner is active", async () => 
   expect(await sync()).toMatchObject({
     sent: 0, error: "AgentsView label state changed outside the runner. Reconcile the state and restart the runner",
   });
+  expect(reads).toBe(1);
+});
+
+test("stays stopped after a backup overwrites the file during a PATCH", async () => {
+  const path = newState();
+  const original = readFileSync(path);
+  const error = "AgentsView label state changed outside the runner. Reconcile the state and restart the runner";
+  let reads = 0;
+  const sync = createSessionLabelSync(endpoint, {
+    path,
+    readPage: async () => {
+      reads++;
+      return [row(1, { branch: `factory/FAC-61-a${reads}` })];
+    },
+    send: async () => {
+      writeFileSync(path, original);
+      return accepted();
+    },
+  });
+  expect(await sync()).toMatchObject({ sent: 1, error });
+  expect(await sync()).toMatchObject({ sent: 0, error });
   expect(reads).toBe(1);
 });
 
@@ -379,17 +424,14 @@ test("moves past failures and a whole page of previously acknowledged targets", 
 test("a candidate read that misses the deadline is discarded even when it later returns", async () => {
   const path = newState();
   const original = readFileSync(path);
-  let firstTime = true;
+  let offset = 0;
   const { promise: pending, resolve: release } = Promise.withResolvers<LabelRow[]>();
   let reads = 0;
   let sends = 0;
   const sync = createSessionLabelSync(endpoint, {
     path,
-    now: () => {
-      const offset = firstTime ? 0 : 9_900;
-      firstTime = false;
-      return performance.now() + offset;
-    },
+    now: () => performance.now() + offset,
+    verifyState: async () => { offset = 9_900; },
     readPage: () => {
       reads++;
       return pending;

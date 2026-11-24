@@ -8,7 +8,7 @@ import { Client } from "pg";
 import { CLAUDE_SESSION_ID, type LabelRow } from "../lib/agentsview-labels";
 import { agentsviewUrlSchema, type FactoryConfig } from "../lib/config";
 import { stateDir } from "../lib/outbox";
-import { type LabelReceipt, type StateFile, type StateOperation, type StateReply, type StateRequest, stateFile } from "./agentsview-label-state";
+import { LabelStateChangedError, type LabelReceipt, type StateFile, type StateOperation, type StateReply, type StateRequest, stateFile } from "./agentsview-label-state";
 
 const PAGE_SIZE = 25;
 const TICK_MS = 10_000;
@@ -155,7 +155,7 @@ async function runStateWorker(request: StateRequest, timeout: number) {
   worker.child.stdin?.end(JSON.stringify(request));
   const { stdout } = await worker;
   const reply: StateReply = JSON.parse(stdout);
-  if ("error" in reply) throw new Error(reply.error);
+  if ("error" in reply) throw reply.fileChanged ? new LabelStateChangedError() : new Error(reply.error);
   return reply.result;
 }
 
@@ -201,7 +201,7 @@ export function createSessionLabelSync(
         (trustedIdentity !== file.identity || (expected && expected.version !== file.version))) {
       changedOutsideRunner = true;
     }
-    if (changedOutsideRunner) throw new Error("AgentsView label state changed outside the runner. Reconcile the state and restart the runner");
+    if (changedOutsideRunner) throw new LabelStateChangedError();
   }
 
   return async (): Promise<LabelResult> => {
@@ -226,6 +226,7 @@ export function createSessionLabelSync(
       const verification = verified;
       const inspectionError = await beforeDeadline(checkTime, () => verification.error);
       if (inspectionError) {
+        if (trustedIdentity !== undefined && inspectionError instanceof LabelStateChangedError) changedOutsideRunner = true;
         verified = undefined;
         throw inspectionError;
       }
@@ -233,7 +234,7 @@ export function createSessionLabelSync(
         const current = stateFile(path);
         checkFileIdentity(current, verification.file);
         if (verification.file.version !== current.version) {
-          throw new Error("AgentsView label state changed during the tick");
+          throw new LabelStateChangedError();
         }
       };
       checkTime();
@@ -251,6 +252,7 @@ export function createSessionLabelSync(
           verification.file = updated.file;
           return updated.plans;
         } catch (error) {
+          if (error instanceof LabelStateChangedError) changedOutsideRunner = true;
           // The worker may have completed a transaction before the deadline expired.
           verified = undefined;
           if (now() >= deadline) throw new DeadlineExceeded();
@@ -259,10 +261,10 @@ export function createSessionLabelSync(
       };
       const rows = page.slice(0, PAGE_SIZE);
       const plans = rows.length > 0 ? await update({ kind: "prepare", rows }) : [];
-      const receipts: LabelReceipt[] = [];
       for (const [index, row] of rows.entries()) {
         checkTime();
         const planned = plans[index];
+        let receipt: LabelReceipt | undefined;
         if (planned) {
           checkFile();
           const { id, session } = planned;
@@ -282,7 +284,7 @@ export function createSessionLabelSync(
               });
               void response.body?.cancel().catch(() => undefined);
               if (!response.ok) throw new Error(`HTTP ${response.status}`);
-              receipts.push({ id, body });
+              receipt = { id, body };
               result.sent++;
             } catch (error) {
               result.failed++;
@@ -291,9 +293,9 @@ export function createSessionLabelSync(
           }
         }
         after = { session: row.session_id, agent: row.agent_id ?? "" };
+        if (receipt) await update({ kind: "record", receipt });
       }
       if (page.length <= PAGE_SIZE) after = start;
-      if (receipts.length > 0) await update({ kind: "record", receipts });
       checkTime();
     } catch (error) {
       result.timedOut = error instanceof DeadlineExceeded || now() >= deadline || (
