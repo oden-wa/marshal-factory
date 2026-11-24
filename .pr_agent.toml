@@ -1,0 +1,18 @@
+[config]
+model = "openai/gpt-6.2-astra"
+fallback_models = ["openai/gpt-6.2-sol"]
+reasoning_effort = "high"
+max_model_tokens = 128000
+response_language = "ja-JP"
+ai_timeout = 360
+custom_model_max_tokens = 922000
+additional_reasoning_effort_models = ["openai/gpt-6.2-astra", "openai/gpt-6.2-sol"]
+no_temperature_models = ["openai/gpt-6.2-astra", "openai/gpt-6.2-sol"]
+output_run_details = true
+
+[model_routing]
+enable = true
+
+[[model_routing.rules]]
+max_hunks = 3
+model = "openai/gpt-6.2-sol"

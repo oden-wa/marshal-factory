@@ -1,0 +1,57 @@
+name: PR Agent
+
+on:
+  pull_request_target:
+    types: [opened, reopened, synchronize]
+  issue_comment:
+    types: [created]
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: Pull request number to review
+        required: true
+        type: number
+
+permissions: {}
+
+jobs:
+  review:
+    if: >-
+      github.event_name == 'pull_request_target'
+      || github.event_name == 'workflow_dispatch'
+      || (github.event_name == 'issue_comment'
+      && github.event.issue.pull_request
+      && github.event.sender.type != 'Bot'
+      && github.event.comment.body == '/review'
+      && contains(fromJSON('["OWNER", "MEMBER", "COLLABORATOR"]'), github.event.comment.author_association))
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      pull-requests: write
+    concurrency:
+      group: pr-agent-${{ github.event.pull_request.number || github.event.issue.number || inputs.pr_number }}
+      cancel-in-progress: true
+    steps:
+      # PR-Agent fetches the diff via the GitHub API and reads .pr_agent.toml from the default branch.
+      - name: Review the pull request
+        env:
+          OPENAI__KEY: ${{ secrets.OPENAI_KEY }}
+          GITHUB__USER_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number || github.event.issue.number || inputs.pr_number }}
+        run: |
+          if [[ ! "$PR_NUMBER" =~ ^[1-9][0-9]*$ ]]; then
+            echo "::error::Enter a positive integer pull request number."
+            exit 1
+          fi
+          if [[ -z "$OPENAI__KEY" ]]; then
+            echo "::error::Set the OPENAI_KEY repository secret."
+            exit 1
+          fi
+
+          pr_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/pull/$PR_NUMBER"
+          for tool in review improve; do
+            docker run --rm -e OPENAI__KEY -e GITHUB__USER_TOKEN -e CONFIG__PROPAGATE_TOOL_ERRORS=true \
+              pragent/pr-agent@sha256:10a8893d5e081be1a5ae825843d9fc14f8e8d59d8a4f61d67c1775415156079f \
+              --pr_url "$pr_url" "$tool"
+          done
