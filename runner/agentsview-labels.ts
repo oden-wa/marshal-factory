@@ -5,16 +5,17 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { Client } from "pg";
+import { databaseConnectionString } from "../db/connection";
 import { CLAUDE_SESSION_ID, type LabelRow } from "../lib/agentsview-labels";
 import { agentsviewUrlSchema, type FactoryConfig } from "../lib/config";
 import { stateDir } from "../lib/outbox";
-import { LabelStateChangedError, type LabelReceipt, type StateFile, type StateOperation, type StateReply, type StateRequest, stateFile } from "./agentsview-label-state";
+import { LabelStateChangedError, type LabelReceipt, type StateFile, type StateOperation, type StateReply, type StateRequest, type StateResult, stateFile } from "./agentsview-label-state";
 
 const PAGE_SIZE = 25;
 const TICK_MS = 10_000;
 const HTTP_MS = 3_000;
 const WINDOW_MS = 7 * 86_400_000;
-const STATE_CHECK_MS = 60_000;
+const STATE_WORKER_MS = 60_000;
 const labelStatePath = () => join(stateDir(), "agentsview-labels.sqlite");
 const workerScript = fileURLToPath(new URL("./agentsview-label-state-worker.ts", import.meta.url));
 const execFileAsync = promisify(execFile);
@@ -54,11 +55,9 @@ const candidatesSql = `
 const readCandidates: ReadPage = async (after, limit, checkTime, signal) => {
   const databaseUrl = process.env.DATABASE_URL;
   if (!databaseUrl) throw new Error("DATABASE_URL is required for AgentsView labels");
-  const parsed = new URL(databaseUrl);
-  if (parsed.searchParams.get("sslmode") === "require") parsed.searchParams.set("sslmode", "verify-full");
   const timeout = checkTime();
   const client = new Client({
-    connectionString: parsed.href,
+    connectionString: databaseConnectionString(databaseUrl),
     connectionTimeoutMillis: timeout,
     query_timeout: timeout,
   });
@@ -149,8 +148,8 @@ export function initializeSessionLabelState(rawUrl: string, path = labelStatePat
   return path;
 }
 
-async function runStateWorker(request: StateRequest, timeout: number) {
-  const worker = execFileAsync(process.execPath, [workerScript], { timeout, killSignal: "SIGKILL" });
+async function runStateWorker(request: StateRequest): Promise<StateResult> {
+  const worker = execFileAsync(process.execPath, [workerScript], { timeout: STATE_WORKER_MS, killSignal: "SIGKILL" });
   worker.child.stdin?.on("error", () => undefined);
   worker.child.stdin?.end(JSON.stringify(request));
   const { stdout } = await worker;
@@ -174,7 +173,7 @@ type LabelOptions = {
   readPage?: ReadPage;
   send?: (url: string, init: RequestInit) => Promise<Response>;
   now?: () => number;
-  verifyState?: (request: StateRequest) => Promise<void>;
+  runState?: typeof runStateWorker;
 };
 
 export function createSessionLabelSync(
@@ -189,33 +188,40 @@ export function createSessionLabelSync(
     readPage = readCandidates,
     send = fetch,
     now = () => performance.now(),
-    verifyState: verify = async (request) => { await runStateWorker(request, STATE_CHECK_MS); },
+    runState = runStateWorker,
   } = options;
-  let inspection: { file: StateFile; error: Promise<Error | undefined> } | undefined;
+  let pendingState: Promise<{ result: StateResult } | { error: unknown }> | undefined;
   let trustedFile: StateFile | undefined;
   let changedOutsideRunner = false;
   let after = start;
+  let activeTick: Promise<LabelResult> | undefined;
 
   function checkFile(expected: StateFile) {
     if (stateFile(path).version !== expected.version) throw new LabelStateChangedError();
   }
 
-  async function inspectFile(file: StateFile, checkTime: () => number) {
-    if (inspection?.file.version !== file.version) {
-      const error = verify({ path, url, file, operation: { kind: "inspect" } }).then(
-        () => undefined,
-        (cause: unknown) => cause instanceof Error ? cause : new Error(String(cause)),
-      );
-      inspection = { file, error };
-    }
-    const pending = inspection.error;
-    const error = await beforeDeadline(checkTime, () => pending);
-    inspection = undefined;
-    if (error) throw error;
-    checkFile(file);
+  async function finishState(pending: NonNullable<typeof pendingState>, checkTime: () => number) {
+    // If the tick expires first, the next tick must check the same worker's result.
+    const reply = await beforeDeadline(checkTime, () => pending);
+    pendingState = undefined;
+    if ("error" in reply) throw reply.error;
+    checkFile(reply.result.file);
+    trustedFile = reply.result.file;
+    checkTime();
+    return reply.result;
   }
 
-  return async (): Promise<LabelResult> => {
+  function updateState(operation: StateOperation, checkTime: () => number) {
+    checkTime();
+    const file = trustedFile ?? stateFile(path);
+    pendingState = runState({ path, url, file, operation }).then(
+      (result) => ({ result }),
+      (error: unknown) => ({ error }),
+    );
+    return finishState(pendingState, checkTime);
+  }
+
+  async function tick(): Promise<LabelResult> {
     const deadline = now() + TICK_MS;
     const checkTime = () => {
       const remaining = Math.floor(deadline - now());
@@ -225,33 +231,21 @@ export function createSessionLabelSync(
     const result: LabelResult = { sent: 0, failed: 0, conflicts: 0, timedOut: false, issues: [] };
     try {
       if (changedOutsideRunner) throw new LabelStateChangedError();
-      let file = trustedFile ?? stateFile(path);
-      if (!trustedFile) {
-        checkTime();
-        await inspectFile(file, checkTime);
-        trustedFile = file;
-      } else {
-        checkFile(file);
-      }
+      if (pendingState) await finishState(pendingState, checkTime);
+      const file = trustedFile ?? (await updateState({ kind: "inspect" }, checkTime)).file;
+      checkFile(file);
       const page = await beforeDeadline(checkTime, (signal) => readPage(after, PAGE_SIZE + 1, checkTime, signal));
       checkFile(file);
-      const update = async (operation: StateOperation) => {
-        const updated = await beforeDeadline(checkTime, () =>
-          runStateWorker({ path, url, file, operation }, checkTime()),
-        );
-        checkFile(updated.file);
-        file = trustedFile = updated.file;
-        checkTime();
-        return updated.plans;
-      };
       const rows = page.slice(0, PAGE_SIZE);
-      const plans = rows.length > 0 ? await update({ kind: "prepare", rows }) : [];
+      const prepared = rows.length > 0 ? await updateState({ kind: "prepare", rows }, checkTime) : { file, plans: [] };
+      const { plans } = prepared;
+      let sendFile = prepared.file;
       for (const [index, row] of rows.entries()) {
         checkTime();
         const planned = plans[index];
         let receipt: LabelReceipt | undefined;
         if (planned) {
-          checkFile(file);
+          checkFile(sendFile);
           const { id, session } = planned;
           if (planned.kind === "conflict") {
             result.conflicts++;
@@ -278,7 +272,7 @@ export function createSessionLabelSync(
           }
         }
         after = { session: row.session_id, agent: row.agent_id ?? "" };
-        if (receipt) await update({ kind: "record", receipt });
+        if (receipt) sendFile = (await updateState({ kind: "record", receipt }, checkTime)).file;
       }
       if (page.length <= PAGE_SIZE) after = start;
       checkTime();
@@ -290,5 +284,7 @@ export function createSessionLabelSync(
       if (!(error instanceof DeadlineExceeded)) result.error = error instanceof Error ? error.message : String(error);
     }
     return result;
-  };
+  }
+
+  return () => (activeTick ??= tick().finally(() => { activeTick = undefined; }));
 }

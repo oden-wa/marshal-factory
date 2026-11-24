@@ -4,6 +4,7 @@ import { existsSync, mkdtempSync, readFileSync, renameSync, rmSync, statSync, wr
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { LabelRow } from "../lib/agentsview-labels";
+import { runStateOperation, type StateResult } from "./agentsview-label-state";
 import { createSessionLabelSync, initializeSessionLabelState } from "./agentsview-labels";
 
 declare const Bun: {
@@ -244,10 +245,13 @@ test("a slow integrity check leaves the tick without blocking reads on subsequen
   const sync = createSessionLabelSync(endpoint, {
     path,
     now: () => now,
-    verifyState: () => {
-      checks++;
-      now += 10_000;
-      return validation.promise;
+    runState: async (request) => {
+      if (request.operation.kind === "inspect") {
+        checks++;
+        now += 10_000;
+        await validation.promise;
+      }
+      return runStateOperation(request);
     },
     readPage: async () => {
       reads++;
@@ -344,6 +348,86 @@ test("rejects a same-file restore after the receipt runs out of time", async () 
   attempt = 2;
   expect(await sync()).toMatchObject({ sent: 0 });
   expect(bodies).toEqual(['{"add":["mf.job=FAC-61","mf.attempt=1"]}']);
+});
+
+for (const operation of ["prepare", "record"]) {
+  test(`resumes when SQLite commits ${operation} but its reply misses the tick`, async () => {
+    let clock = 0;
+    let sends = 0;
+    const reply = Promise.withResolvers<StateResult>();
+    let committed: StateResult | undefined;
+    const sync = createSessionLabelSync(endpoint, {
+      path: newState(),
+      now: () => clock,
+      readPage: async () => [row()],
+      send: async () => {
+        sends++;
+        return accepted();
+      },
+      runState: async (request) => {
+        const update = runStateOperation(request);
+        if (request.operation.kind === operation && !committed) {
+          committed = update;
+          clock += 10_000;
+          return reply.promise;
+        }
+        return update;
+      },
+    });
+
+    const sent = operation === "prepare" ? 0 : 1;
+    expect(await sync()).toMatchObject({ sent, timedOut: true });
+    if (!committed) throw new Error("SQLite operation did not commit");
+    reply.resolve(committed);
+    expect(await sync()).toEqual({ sent: 1 - sent, failed: 0, conflicts: 0, timedOut: false, issues: [] });
+    expect(sends).toBe(1);
+  });
+}
+
+test("a late commit reply cannot make a restored backup trusted", async () => {
+  const path = newState();
+  const backup = readFileSync(path);
+  let clock = 0;
+  const sync = createSessionLabelSync(endpoint, {
+    path,
+    now: () => clock,
+    readPage: async () => [row()],
+    send: async () => { throw new Error("must not send from a restored backup"); },
+    runState: async (request) => {
+      const update = runStateOperation(request);
+      if (request.operation.kind === "prepare") clock += 10_000;
+      return update;
+    },
+  });
+  expect(await sync()).toMatchObject({ sent: 0, timedOut: true });
+  writeFileSync(path, backup);
+  expect(await sync()).toEqual({
+    sent: 0, failed: 0, conflicts: 0, timedOut: false, issues: [],
+    error: "AgentsView label state changed outside the runner. Reconcile the state and restart the runner",
+  });
+});
+
+test("overlapping calls never send duplicate PATCH requests", async () => {
+  const entered = Promise.withResolvers<void>();
+  const response = Promise.withResolvers<Response>();
+  let sends = 0;
+  const sync = createSessionLabelSync(endpoint, {
+    path: newState(),
+    readPage: async () => [row()],
+    send: () => {
+      sends++;
+      entered.resolve();
+      return response.promise;
+    },
+  });
+  const first = sync();
+  await entered.promise;
+  const second = sync();
+  response.resolve(accepted());
+  expect(await first).toMatchObject({ sent: 1, failed: 0 });
+  expect(await second).toMatchObject({ failed: 0, timedOut: false });
+  expect(await sync()).toEqual({ sent: 0, failed: 0, conflicts: 0, timedOut: false, issues: [] });
+  expect(sends).toBe(1);
 });
 
 test("refuses a WAL attribution database before reading candidates", async () => {
@@ -449,6 +533,7 @@ test("moves past failures and a whole page of previously acknowledged targets", 
   const requests: string[] = [];
   const sync = createSessionLabelSync(endpoint, {
     path: newState(),
+    runState: async (request) => runStateOperation(request),
     readPage: async ({ session }, limit) => rows.filter((item) => item.session_id > session).slice(0, limit),
     send: async (url) => {
       requests.push(url);
@@ -475,7 +560,11 @@ test("a candidate read that misses the deadline is discarded even when it later 
   const sync = createSessionLabelSync(endpoint, {
     path,
     now: () => performance.now() + offset,
-    verifyState: async () => { offset = 9_900; },
+    runState: async (request) => {
+      const update = runStateOperation(request);
+      if (request.operation.kind === "inspect") offset = 9_900;
+      return update;
+    },
     readPage: () => {
       reads++;
       return pending;
