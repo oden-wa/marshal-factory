@@ -9,7 +9,7 @@ declare module "bun:sqlite" {
       get(...params: unknown[]): Row | null;
       run(...params: unknown[]): void;
     };
-    transaction<Result>(fn: () => Result): { immediate(): Result };
+    transaction<Result>(fn: () => Result): { immediate(): Result; exclusive(): Result };
     close(): void;
   }
 }

@@ -323,6 +323,50 @@ test("stays stopped after a backup overwrites the file during a PATCH", async ()
   expect(reads).toBe(1);
 });
 
+test("rejects a same-file restore after the receipt runs out of time", async () => {
+  const path = newState();
+  const backup = readFileSync(path);
+  let clock = 0;
+  let attempt = 1;
+  const bodies: unknown[] = [];
+  const sync = createSessionLabelSync(endpoint, {
+    path,
+    now: () => clock,
+    readPage: async () => [row(1, { branch: `factory/FAC-61-a${attempt}` })],
+    send: async (_url, { body }) => {
+      bodies.push(body);
+      if (attempt === 1) clock = 10_000;
+      return accepted();
+    },
+  });
+  expect(await sync()).toMatchObject({ sent: 1, timedOut: true });
+  writeFileSync(path, backup);
+  attempt = 2;
+  expect(await sync()).toMatchObject({ sent: 0 });
+  expect(bodies).toEqual(['{"add":["mf.job=FAC-61","mf.attempt=1"]}']);
+});
+
+test("refuses a WAL attribution database before reading candidates", async () => {
+  const path = newState();
+  const db = new Database(path, { create: false });
+  try {
+    db.exec("PRAGMA journal_mode = WAL; PRAGMA wal_autocheckpoint = 0");
+    db.query("INSERT INTO attributions (session_id, job, attempt) VALUES (?, ?, ?)").run(root(1), "FAC-61", 1);
+    let reads = 0;
+    const sync = createSessionLabelSync(endpoint, {
+      path,
+      readPage: async () => {
+        reads++;
+        return [];
+      },
+    });
+    expect(await sync()).toMatchObject({ sent: 0, error: "AgentsView label state requires DELETE journal mode" });
+    expect(reads).toBe(0);
+  } finally {
+    db.close();
+  }
+});
+
 test("refuses to read candidates from a database with an orphaned target", async () => {
   const path = newState();
   const db = new Database(path, { create: false });
@@ -451,33 +495,26 @@ test("a candidate read that misses the deadline is discarded even when it later 
 });
 
 test("the candidate read and HTTP share a deadline and the next tick continues at the unprocessed target", async () => {
-  let offset = 0;
+  let now = 0;
   const ids: string[] = [];
-  const server = Bun.serve({
-    hostname: "127.0.0.1",
-    port: 0,
-    async fetch(request) {
-      ids.push(new URL(request.url).pathname);
-      if (ids.length === 1) await new Promise((resolve) => setTimeout(resolve, 400));
+  const rows = [row(1), row(2)];
+  const sync = createSessionLabelSync(endpoint, {
+    path: newState(),
+    now: () => now,
+    readPage: async ({ session }) => {
+      now += 7_000;
+      return rows.filter((item) => item.session_id > session);
+    },
+    send: async (url) => {
+      ids.push(new URL(url).pathname);
+      if (ids.length === 1) {
+        now += 3_000;
+        throw new Error("request timed out");
+      }
       return accepted();
     },
   });
-  try {
-    const rows = [row(1), row(2)];
-    let firstPage = true;
-    const sync = createSessionLabelSync({ url: server.url.href }, {
-      path: newState(server.url.origin),
-      now: () => performance.now() + offset,
-      readPage: async ({ session }) => {
-        if (firstPage) offset += 9_800;
-        firstPage = false;
-        return rows.filter((item) => item.session_id > session);
-      },
-    });
-    expect(await sync()).toMatchObject({ sent: 0, failed: 1, timedOut: true });
-    expect(await sync()).toMatchObject({ sent: 1, failed: 0, timedOut: false });
-    expect(ids).toEqual([root(1), root(2)].map((id) => `/api/v1/sessions/${id}/labels`));
-  } finally {
-    await server.stop(true);
-  }
+  expect(await sync()).toMatchObject({ sent: 0, failed: 1, timedOut: true });
+  expect(await sync()).toMatchObject({ sent: 1, failed: 0, timedOut: false });
+  expect(ids).toEqual([root(1), root(2)].map((id) => `/api/v1/sessions/${id}/labels`));
 });

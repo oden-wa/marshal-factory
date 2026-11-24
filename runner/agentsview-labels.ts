@@ -191,17 +191,28 @@ export function createSessionLabelSync(
     now = () => performance.now(),
     verifyState: verify = async (request) => { await runStateWorker(request, STATE_CHECK_MS); },
   } = options;
-  let verified: { file: StateFile; error: Promise<Error | undefined> } | undefined;
-  let trustedIdentity: string | undefined;
+  let inspection: { file: StateFile; error: Promise<Error | undefined> } | undefined;
+  let trustedFile: StateFile | undefined;
   let changedOutsideRunner = false;
   let after = start;
 
-  function checkFileIdentity(file: StateFile, expected?: StateFile) {
-    if (trustedIdentity !== undefined &&
-        (trustedIdentity !== file.identity || (expected && expected.version !== file.version))) {
-      changedOutsideRunner = true;
+  function checkFile(expected: StateFile) {
+    if (stateFile(path).version !== expected.version) throw new LabelStateChangedError();
+  }
+
+  async function inspectFile(file: StateFile, checkTime: () => number) {
+    if (inspection?.file.version !== file.version) {
+      const error = verify({ path, url, file, operation: { kind: "inspect" } }).then(
+        () => undefined,
+        (cause: unknown) => cause instanceof Error ? cause : new Error(String(cause)),
+      );
+      inspection = { file, error };
     }
-    if (changedOutsideRunner) throw new LabelStateChangedError();
+    const pending = inspection.error;
+    const error = await beforeDeadline(checkTime, () => pending);
+    inspection = undefined;
+    if (error) throw error;
+    checkFile(file);
   }
 
   return async (): Promise<LabelResult> => {
@@ -213,51 +224,25 @@ export function createSessionLabelSync(
     };
     const result: LabelResult = { sent: 0, failed: 0, conflicts: 0, timedOut: false, issues: [] };
     try {
-      const file = stateFile(path);
-      checkFileIdentity(file, verified?.file);
-      checkTime();
-      if (verified?.file.version !== file.version) {
-        const error = verify({ path, url, file, operation: { kind: "inspect" } }).then(
-          () => undefined,
-          (cause: unknown) => cause instanceof Error ? cause : new Error(String(cause)),
-        );
-        verified = { file, error };
+      if (changedOutsideRunner) throw new LabelStateChangedError();
+      let file = trustedFile ?? stateFile(path);
+      if (!trustedFile) {
+        checkTime();
+        await inspectFile(file, checkTime);
+        trustedFile = file;
+      } else {
+        checkFile(file);
       }
-      const verification = verified;
-      const inspectionError = await beforeDeadline(checkTime, () => verification.error);
-      if (inspectionError) {
-        if (trustedIdentity !== undefined && inspectionError instanceof LabelStateChangedError) changedOutsideRunner = true;
-        verified = undefined;
-        throw inspectionError;
-      }
-      const checkFile = () => {
-        const current = stateFile(path);
-        checkFileIdentity(current, verification.file);
-        if (verification.file.version !== current.version) {
-          throw new LabelStateChangedError();
-        }
-      };
-      checkTime();
-      checkFile();
-      trustedIdentity = file.identity;
       const page = await beforeDeadline(checkTime, (signal) => readPage(after, PAGE_SIZE + 1, checkTime, signal));
-      checkFile();
+      checkFile(file);
       const update = async (operation: StateOperation) => {
-        try {
-          const updated = await beforeDeadline(checkTime, () =>
-            runStateWorker({ path, url, file: verification.file, operation }, checkTime()),
-          );
-          checkTime();
-          checkFileIdentity(updated.file);
-          verification.file = updated.file;
-          return updated.plans;
-        } catch (error) {
-          if (error instanceof LabelStateChangedError) changedOutsideRunner = true;
-          // The worker may have completed a transaction before the deadline expired.
-          verified = undefined;
-          if (now() >= deadline) throw new DeadlineExceeded();
-          throw error;
-        }
+        const updated = await beforeDeadline(checkTime, () =>
+          runStateWorker({ path, url, file, operation }, checkTime()),
+        );
+        checkFile(updated.file);
+        file = trustedFile = updated.file;
+        checkTime();
+        return updated.plans;
       };
       const rows = page.slice(0, PAGE_SIZE);
       const plans = rows.length > 0 ? await update({ kind: "prepare", rows }) : [];
@@ -266,7 +251,7 @@ export function createSessionLabelSync(
         const planned = plans[index];
         let receipt: LabelReceipt | undefined;
         if (planned) {
-          checkFile();
+          checkFile(file);
           const { id, session } = planned;
           if (planned.kind === "conflict") {
             result.conflicts++;
@@ -298,6 +283,7 @@ export function createSessionLabelSync(
       if (page.length <= PAGE_SIZE) after = start;
       checkTime();
     } catch (error) {
+      if (error instanceof LabelStateChangedError) changedOutsideRunner = true;
       result.timedOut = error instanceof DeadlineExceeded || now() >= deadline || (
         error instanceof Error && "code" in error && error.code === "57014"
       );

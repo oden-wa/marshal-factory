@@ -34,7 +34,7 @@ Back up `agentsview-labels.sqlite` with SQLite's backup command or copy it after
 
 In the runner log, check `sessionLabels` on `reconcile` and `tick` results. `conflicts` counts observations that disagree with a saved job, verified attempt, or target owner. The `issues` list names the IDs and the reason. Use `failed` and `issues` to check PATCH errors. The runner retries those targets when the scan returns to them, while each run remains in the seven-day window. The runner records each successful PATCH in SQLite before attempting the next send, so it can skip unchanged labels after a restart.
 
-`timedOut` marks a tick that ran out of its ten-second budget. A separate process checks SQLite integrity and foreign keys, and commits updates to the file. The label step waits for verification before it reads candidates and for the attribution commit before it sends labels. The runner stops labeling if the file changes outside the runner. Reconcile the state and restart the runner after restoring a backup. An `error` on the step reports a candidate read or state file error.
+`timedOut` marks a tick that ran out of its ten-second budget. A separate process checks SQLite integrity and foreign keys, and commits updates to the file. The state file uses SQLite's default `DELETE` journal mode. The label step waits for verification before it reads candidates and confirms the committed generation before it sends labels. If the file version changes without a confirmed commit, the runner stops labeling. Stop the runner before restoring a backup, then reconcile the saved attributions against AgentsView before restarting. An `error` on the step reports a candidate read or state file error.
 
 ## Sources
 
