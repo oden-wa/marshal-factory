@@ -1,22 +1,22 @@
 import { Database } from "bun:sqlite";
 import { execFile } from "node:child_process";
-import { type BigIntStats, linkSync, mkdirSync, mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { linkSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { Client } from "pg";
-import { attributionLabels, CLAUDE_SESSION_ID, labelCandidate, resolveAttribution, type Attribution, type LabelRow } from "../lib/agentsview-labels";
+import { CLAUDE_SESSION_ID, type LabelRow } from "../lib/agentsview-labels";
 import { agentsviewUrlSchema, type FactoryConfig } from "../lib/config";
 import { stateDir } from "../lib/outbox";
+import { type LabelReceipt, type StateFile, type StateOperation, type StateReply, type StateRequest, stateFile } from "./agentsview-label-state";
 
 const PAGE_SIZE = 25;
 const TICK_MS = 10_000;
 const HTTP_MS = 3_000;
 const WINDOW_MS = 7 * 86_400_000;
-const MAX_ACKNOWLEDGED = 4_096;
 const STATE_CHECK_MS = 60_000;
 const labelStatePath = () => join(stateDir(), "agentsview-labels.sqlite");
-const checkScript = fileURLToPath(new URL("./check-agentsview-label-state.ts", import.meta.url));
+const workerScript = fileURLToPath(new URL("./agentsview-label-state-worker.ts", import.meta.url));
 const execFileAsync = promisify(execFile);
 
 type Cursor = { session: string; agent: string };
@@ -54,9 +54,11 @@ const candidatesSql = `
 const readCandidates: ReadPage = async (after, limit, checkTime, signal) => {
   const databaseUrl = process.env.DATABASE_URL;
   if (!databaseUrl) throw new Error("DATABASE_URL is required for AgentsView labels");
+  const parsed = new URL(databaseUrl);
+  if (parsed.searchParams.get("sslmode") === "require") parsed.searchParams.set("sslmode", "verify-full");
   const timeout = checkTime();
   const client = new Client({
-    connectionString: databaseUrl.replace("sslmode=require", "sslmode=verify-full"),
+    connectionString: parsed.href,
     connectionTimeoutMillis: timeout,
     query_timeout: timeout,
   });
@@ -147,57 +149,14 @@ export function initializeSessionLabelState(rawUrl: string, path = labelStatePat
   return path;
 }
 
-async function verifyState(path: string) {
-  await execFileAsync(process.execPath, [checkScript, path], { timeout: STATE_CHECK_MS, killSignal: "SIGKILL" });
-}
-
-function stateFile(path: string) {
-  const file = statSync(path, { bigint: true });
-  if (!file.isFile() || file.size === BigInt(0)) throw new Error("AgentsView label state is missing or empty");
-  return file;
-}
-
-const sameFile = (a: BigIntStats, b: BigIntStats) => a.ino === b.ino && a.dev === b.dev;
-const sameContents = (a: BigIntStats, b: BigIntStats) =>
-  sameFile(a, b) && a.size === b.size && a.mtimeNs === b.mtimeNs && a.ctimeNs === b.ctimeNs;
-
-function openState(path: string, url: string, checkTime: () => number) {
-  const db = new Database(path, { create: false });
-  try {
-    db.exec("PRAGMA busy_timeout = 0; PRAGMA foreign_keys = ON; PRAGMA synchronous = FULL");
-    checkTime();
-    const endpoint = db.query<{ url: string }>("SELECT url FROM endpoint WHERE singleton = 1").get();
-    if (endpoint?.url !== url) throw new Error("AgentsView label state URL does not match agentsview.url");
-    return db;
-  } catch (error) {
-    db.close();
-    throw error;
-  }
-}
-
-function prepareTarget(db: Database, checkTime: () => number) {
-  const getAttribution = db.query<Attribution>("SELECT job, attempt FROM attributions WHERE session_id = ?");
-  const saveAttribution = db.query(`
-    INSERT INTO attributions (session_id, job, attempt) VALUES (?, ?, ?)
-    ON CONFLICT (session_id) DO UPDATE SET attempt = excluded.attempt
-  `);
-  const getOwner = db.query<{ session_id: string }>("SELECT session_id FROM targets WHERE id = ?");
-  const saveOwner = db.query("INSERT INTO targets (id, session_id) VALUES (?, ?)");
-  return ({ id, session, attribution }: NonNullable<ReturnType<typeof labelCandidate>>) => db.transaction(() => {
-    const saved = getAttribution.get(session);
-    const resolved = resolveAttribution(saved, attribution);
-    if (!resolved) return { kind: "conflict", conflict: "attribution", saved, observed: attribution } as const;
-    const owner = getOwner.get(id);
-    if (owner && owner.session_id !== session) return { kind: "conflict", conflict: "target owner", owner: owner.session_id } as const;
-    checkTime();
-    if (resolved !== saved) saveAttribution.run(session, resolved.job, resolved.attempt);
-    if (!owner) {
-      checkTime();
-      saveOwner.run(id, session);
-    }
-    checkTime();
-    return { kind: "send", labels: attributionLabels(resolved), changed: resolved !== saved || !owner } as const;
-  }).immediate();
+async function runStateWorker(request: StateRequest, timeout: number) {
+  const worker = execFileAsync(process.execPath, [workerScript], { timeout, killSignal: "SIGKILL" });
+  worker.child.stdin?.on("error", () => undefined);
+  worker.child.stdin?.end(JSON.stringify(request));
+  const { stdout } = await worker;
+  const reply: StateReply = JSON.parse(stdout);
+  if ("error" in reply) throw new Error(reply.error);
+  return reply.result;
 }
 
 type LabelIssue = { id: string; session: string; conflict: string } | { id: string; session: string; error: string };
@@ -215,8 +174,7 @@ type LabelOptions = {
   readPage?: ReadPage;
   send?: (url: string, init: RequestInit) => Promise<Response>;
   now?: () => number;
-  verifyState?: (path: string) => Promise<void>;
-  maxAcknowledged?: number;
+  verifyState?: (request: StateRequest) => Promise<void>;
 };
 
 export function createSessionLabelSync(
@@ -231,12 +189,20 @@ export function createSessionLabelSync(
     readPage = readCandidates,
     send = fetch,
     now = () => performance.now(),
-    verifyState: verify = verifyState,
-    maxAcknowledged = MAX_ACKNOWLEDGED,
+    verifyState: verify = async (request) => { await runStateWorker(request, STATE_CHECK_MS); },
   } = options;
-  const acknowledged = new Map<string, string>();
-  let verified: { file: BigIntStats; result: Promise<boolean> } | undefined;
+  let verified: { file: StateFile; error: Promise<Error | undefined> } | undefined;
+  let trustedIdentity: string | undefined;
+  let changedOutsideRunner = false;
   let after = start;
+
+  function checkFileIdentity(file: StateFile, expected?: StateFile) {
+    if (trustedIdentity !== undefined &&
+        (trustedIdentity !== file.identity || (expected && expected.version !== file.version))) {
+      changedOutsideRunner = true;
+    }
+    if (changedOutsideRunner) throw new Error("AgentsView label state changed outside the runner. Reconcile the state and restart the runner");
+  }
 
   return async (): Promise<LabelResult> => {
     const deadline = now() + TICK_MS;
@@ -246,86 +212,94 @@ export function createSessionLabelSync(
       return remaining;
     };
     const result: LabelResult = { sent: 0, failed: 0, conflicts: 0, timedOut: false, issues: [] };
-    let db: Database | undefined;
     try {
       const file = stateFile(path);
+      checkFileIdentity(file, verified?.file);
       checkTime();
-      if (!verified || !sameContents(file, verified.file)) {
-        verified = { file, result: verify(path).then(() => true, () => false) };
+      if (verified?.file.version !== file.version) {
+        const error = verify({ path, url, file, operation: { kind: "inspect" } }).then(
+          () => undefined,
+          (cause: unknown) => cause instanceof Error ? cause : new Error(String(cause)),
+        );
+        verified = { file, error };
       }
       const verification = verified;
-      if (!(await beforeDeadline(checkTime, () => verification.result))) {
+      const inspectionError = await beforeDeadline(checkTime, () => verification.error);
+      if (inspectionError) {
         verified = undefined;
-        throw new Error("AgentsView label state failed SQLite quick_check");
+        throw inspectionError;
       }
       const checkFile = () => {
-        if (!sameContents(verification.file, stateFile(path))) {
+        const current = stateFile(path);
+        checkFileIdentity(current, verification.file);
+        if (verification.file.version !== current.version) {
           throw new Error("AgentsView label state changed during the tick");
         }
       };
       checkTime();
       checkFile();
-      db = openState(path, url, checkTime);
-      const plan = prepareTarget(db, checkTime);
-      checkFile();
+      trustedIdentity = file.identity;
       const page = await beforeDeadline(checkTime, (signal) => readPage(after, PAGE_SIZE + 1, checkTime, signal));
-      checkTime();
       checkFile();
-      for (const row of page.slice(0, PAGE_SIZE)) {
+      const update = async (operation: StateOperation) => {
+        try {
+          const updated = await beforeDeadline(checkTime, () =>
+            runStateWorker({ path, url, file: verification.file, operation }, checkTime()),
+          );
+          checkTime();
+          checkFileIdentity(updated.file);
+          verification.file = updated.file;
+          return updated.plans;
+        } catch (error) {
+          // The worker may have completed a transaction before the deadline expired.
+          verified = undefined;
+          if (now() >= deadline) throw new DeadlineExceeded();
+          throw error;
+        }
+      };
+      const rows = page.slice(0, PAGE_SIZE);
+      const plans = rows.length > 0 ? await update({ kind: "prepare", rows }) : [];
+      const receipts: LabelReceipt[] = [];
+      for (const [index, row] of rows.entries()) {
         checkTime();
-        const candidate = labelCandidate(row);
-        if (candidate) {
+        const planned = plans[index];
+        if (planned) {
           checkFile();
-          const planned = plan(candidate);
-          const { id, session } = candidate;
+          const { id, session } = planned;
           if (planned.kind === "conflict") {
             result.conflicts++;
-            result.issues.push({ id, session, ...planned });
-          } else {
-            if (planned.changed) {
-              const current = stateFile(path);
-              if (!sameFile(verification.file, current)) throw new Error("AgentsView label state changed during the tick");
-              verification.file = current;
-            }
-            const body = JSON.stringify({ add: planned.labels });
-            if (acknowledged.get(id) !== body) {
-              checkFile();
-              const timeout = checkTime();
-              try {
-                const response = await send(`${url}/api/v1/sessions/${encodeURIComponent(id)}/labels`, {
-                  method: "PATCH",
-                  headers: { "Content-Type": "application/json", Origin: origin },
-                  body,
-                  redirect: "error",
-                  signal: AbortSignal.timeout(Math.min(HTTP_MS, timeout)),
-                });
-                void response.body?.cancel().catch(() => undefined);
-                if (!response.ok) throw new Error(`HTTP ${response.status}`);
-                acknowledged.delete(id);
-                acknowledged.set(id, body);
-                if (acknowledged.size > maxAcknowledged) {
-                  const oldest = acknowledged.keys().next().value;
-                  if (oldest !== undefined) acknowledged.delete(oldest);
-                }
-                result.sent++;
-              } catch (error) {
-                result.failed++;
-                result.issues.push({ id, session, error: error instanceof Error ? error.message : String(error) });
-              }
+            result.issues.push(planned);
+          } else if (!planned.accepted) {
+            const { body } = planned;
+            const timeout = checkTime();
+            try {
+              const response = await send(`${url}/api/v1/sessions/${encodeURIComponent(id)}/labels`, {
+                method: "PATCH",
+                headers: { "Content-Type": "application/json", Origin: origin },
+                body,
+                redirect: "error",
+                signal: AbortSignal.timeout(Math.min(HTTP_MS, timeout)),
+              });
+              void response.body?.cancel().catch(() => undefined);
+              if (!response.ok) throw new Error(`HTTP ${response.status}`);
+              receipts.push({ id, body });
+              result.sent++;
+            } catch (error) {
+              result.failed++;
+              result.issues.push({ id, session, error: error instanceof Error ? error.message : String(error) });
             }
           }
         }
         after = { session: row.session_id, agent: row.agent_id ?? "" };
       }
       if (page.length <= PAGE_SIZE) after = start;
+      if (receipts.length > 0) await update({ kind: "record", receipts });
       checkTime();
     } catch (error) {
       result.timedOut = error instanceof DeadlineExceeded || now() >= deadline || (
         error instanceof Error && "code" in error && error.code === "57014"
       );
       if (!(error instanceof DeadlineExceeded)) result.error = error instanceof Error ? error.message : String(error);
-    } finally {
-      db?.close();
     }
     return result;
   };

@@ -1,6 +1,6 @@
 import { Database } from "bun:sqlite";
 import { afterEach, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { LabelRow } from "../lib/agentsview-labels";
@@ -195,26 +195,20 @@ test("a rejected child cannot set its proposed parent's attempt", async () => {
   expect(bodies.at(-1)).toBe('{"add":["mf.job=FAC-61","mf.attempt=3"]}');
 });
 
-test("bounds acknowledged targets and safely resends the same labels after eviction", async () => {
+test("remembers successful PATCH requests across runner restarts", async () => {
   const path = newState();
-  let rows = [row(1), row(2)];
-  const requests: { url: string; body: unknown }[] = [];
-  const sync = createSessionLabelSync(endpoint, {
+  let sent = 0;
+  const start = () => createSessionLabelSync(endpoint, {
     path,
-    maxAcknowledged: 2,
-    readPage: async () => rows,
-    send: async (url, { body }) => {
-      requests.push({ url, body });
+    readPage: async () => [row(1), row(2)],
+    send: async () => {
+      sent++;
       return accepted();
     },
   });
-  expect(await sync()).toMatchObject({ sent: 2 });
-  rows = [row(2), row(3)];
-  expect(await sync()).toMatchObject({ sent: 1 });
-  expect(await sync()).toMatchObject({ sent: 0 });
-  rows = [row(1)];
-  expect(await sync()).toMatchObject({ sent: 1 });
-  expect(requests.at(-1)).toEqual(requests[0]);
+  expect(await start()()).toMatchObject({ sent: 2 });
+  expect(await start()()).toMatchObject({ sent: 0 });
+  expect(sent).toBe(2);
 });
 
 test("a slow integrity check leaves the tick without blocking reads on subsequent verified ticks", async () => {
@@ -246,7 +240,7 @@ test("a slow integrity check leaves the tick without blocking reads on subsequen
   expect(reads).toBe(2);
 });
 
-test("rechecks the attribution database after an external change before reading candidates", async () => {
+test("stops labeling after an external change to the attribution database", async () => {
   const path = newState();
   let reads = 0;
   const sync = createSessionLabelSync(endpoint, {
@@ -259,8 +253,44 @@ test("rechecks the attribution database after an external change before reading 
   });
   expect(await sync()).toMatchObject({ sent: 1 });
   writeFileSync(path, "not SQLite");
-  expect(await sync()).toMatchObject({ sent: 0, error: "AgentsView label state failed SQLite quick_check" });
+  const result = await sync();
+  expect(result).toMatchObject({ sent: 0 });
+  expect("error" in result).toBe(true);
   expect(reads).toBe(1);
+});
+
+test("rejects a valid replacement file while the runner is active", async () => {
+  const path = newState();
+  let reads = 0;
+  const sync = createSessionLabelSync(endpoint, {
+    path,
+    readPage: async () => {
+      reads++;
+      return [row()];
+    },
+    send: async () => accepted(),
+  });
+  expect(await sync()).toMatchObject({ sent: 1 });
+  renameSync(newState(), path);
+  expect(await sync()).toMatchObject({
+    sent: 0, error: "AgentsView label state changed outside the runner. Reconcile the state and restart the runner",
+  });
+  expect(reads).toBe(1);
+});
+
+test("refuses to read candidates from a database with an orphaned target", async () => {
+  const path = newState();
+  const db = new Database(path, { create: false });
+  try {
+    db.exec("PRAGMA foreign_keys = OFF");
+    db.query("INSERT INTO targets (id, session_id) VALUES (?, ?)").run("agent-orphan", root(1));
+  } finally {
+    db.close();
+  }
+  let reads = 0;
+  const sync = createSessionLabelSync(endpoint, { path, readPage: async () => (reads++, [row()]) });
+  expect(await sync()).toMatchObject({ sent: 0, error: "AgentsView label state failed SQLite integrity checks" });
+  expect(reads).toBe(0);
 });
 
 test("does not read or send while disabled or with missing, corrupt, or mismatched state", async () => {
