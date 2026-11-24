@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test";
+import { Client } from "pg";
 import { databaseConnectionString } from "./connection";
 
 test("keeps certificate and hostname verification for require in libpq mode", () => {
@@ -25,7 +26,12 @@ test("keeps certificate verification for default pg URLs without changing creden
 
 test("uses the effective query option when the connection string repeats a parameter", () => {
   const url = "postgresql://db.example/test?sslmode=require&sslmode=disable";
-  expect(databaseConnectionString(url)).toBe(url);
+  expect(new Client({ connectionString: databaseConnectionString(url) }).ssl).toBe(false);
+});
+
+test("keeps verification when pg ignores a malformed duplicate mode", () => {
+  const url = "postgresql://user:space word@db.example/test?uselibpqcompat=true&sslmode=require&\nsslmode=verify-full";
+  expect(new Client({ connectionString: databaseConnectionString(url) }).ssl).toEqual({});
 });
 
 test("keeps verification when the URL ends in a control character", () => {
