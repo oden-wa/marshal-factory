@@ -27,3 +27,13 @@ test("uses the effective query option when the connection string repeats a param
   const url = "postgresql://db.example/test?sslmode=require&sslmode=disable";
   expect(databaseConnectionString(url)).toBe(url);
 });
+
+test("keeps verification when the URL ends in a control character", () => {
+  const url = "postgresql://db.example/test?uselibpqcompat=true&sslmode=require\f";
+  expect(databaseConnectionString(url)).toBe(url.replace("sslmode=require", "sslmode=verify-full"));
+});
+
+test("leaves the CA path spelling intact on pg URLs with an unescaped password", () => {
+  const url = "postgresql://user:space word@db.example/test?sslmode=require&sslrootcert=/etc/ca.pem";
+  expect(databaseConnectionString(url)).toBe(url.replace("sslmode=require", "sslmode=verify-full"));
+});
