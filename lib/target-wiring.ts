@@ -1,4 +1,5 @@
-import { join } from "node:path";
+import { realpathSync } from "node:fs";
+import { isAbsolute, join } from "node:path";
 import { REPORT_SERVER, REPORT_STAGE_TOOL } from "./factory";
 
 // How a target repo reaches a factory checkout: Claude Code hooks, the factory-report MCP server.
@@ -15,8 +16,16 @@ function shellPath(path: string) {
   return '"' + path.replace(/["\\$`]/g, "\\$&") + '"';
 }
 
+function reporterPrefix(root: string) {
+  return `export FACTORY_HOOK_CWD="$PWD" && cd ${shellPath(join(root, "."))} && exec `;
+}
+
+function reporterCommand(root: string, bun: string) {
+  return `${reporterPrefix(root)}${bun === "bun" ? bun : shellPath(bun)} ${shellPath(join(root, "hooks/report.ts"))}`;
+}
+
 function hooksFor(root: string, bun: string): Record<string, HookEntry[]> {
-  const reporter = { type: "command", command: `${bun === "bun" ? bun : shellPath(bun)} ${shellPath(join(root, "hooks/report.ts"))}`, async: true, timeout: 20 };
+  const reporter = { type: "command", command: reporterCommand(root, bun), async: true, timeout: 20 };
   return {
     SessionStart: [{ hooks: [reporter] }],
     PreToolUse: [{ matcher: "Agent", hooks: [reporter] }],
@@ -27,28 +36,56 @@ function hooksFor(root: string, bun: string): Record<string, HookEntry[]> {
   };
 }
 
-export function reportingHooks(settings: Json, root: string, bun: string, shared: Json = {}) {
+export function reportingHooks(settings: Json, factoryRoot: string, bun: string, shared: Json = {}) {
+  const root = join(factoryRoot, ".");
+  if (!isAbsolute(root)) throw new Error("Factory checkout must be an absolute path");
   const hooks = { ...((settings.hooks as Record<string, HookEntry[]>) ?? {}) };
+  if ((settings.disableAllHooks ?? shared.disableAllHooks) === true) throw new Error("Claude reporting disabled by disableAllHooks");
   // Earlier installers quoted the absolute Bun binary with either kind of quote.
   // Match the complete invocation and exact reporter path, including legacy path quoting.
-  function generated(command: string, script: string) {
-    const path = join(root, "hooks", script);
+  function generated(command: string, script: string, checkout = root) {
+    const prefix = reporterPrefix(checkout);
+    const wrapped = script === "report.ts" && command.startsWith(prefix);
+    if (wrapped) command = command.slice(prefix.length);
+    const path = `${checkout.endsWith("/") ? checkout : checkout + "/"}hooks/${script}`;
     for (const arg of new Set([shellPath(path), '"' + path + '"'])) {
       if (!command.endsWith(" " + arg)) continue;
       const executable = command.slice(0, -arg.length - 1);
-      if (executable === "bun" || /^"\/[^"]*\/bun"$/.test(executable) || /^'\/[^']*\/bun'$/.test(executable) || executable === shellPath(bun)) return true;
+      // The wrapper identifies our command even when Bun was installed under a custom name.
+      if (wrapped && /^"\/(?:\\["\\$`]|[^"\\$`])*"$/.test(executable)) return true;
+      if (executable === "bun" || executable === shellPath(bun) ||
+          /^"\/[^"]*\/bun(?:-canary|-debug)?"$/.test(executable) ||
+          /^'\/[^']*\/bun(?:-canary|-debug)?'$/.test(executable)) return true;
     }
     return false;
   }
+  function referencedCheckout(command: string) {
+    const argument = /"((?:\\.|[^"\\])+)\/hooks\/(report|budget)\.ts"$/.exec(command);
+    const alias = argument?.[1]?.replace(/\\(["\\$`])/g, "$1");
+    let trusted = root;
+    if (alias && alias !== root && alias.startsWith("/")) {
+      try {
+        if (realpathSync(alias) === realpathSync(root)) trusted = alias;
+      } catch { /* An unrelated checkout may not exist on this host. */ }
+    }
+    return trusted;
+  }
   const matcher = (value?: string) => value === "*" || value === ".*" ? "" : value ?? "";
-  for (const [event, ours] of Object.entries(hooksFor(root, bun))) {
-    const installed = (shared.hooks as Record<string, HookEntry[]> | undefined)?.[event] ?? [];
-    const legacy = `bun ${shellPath(join(root, "hooks/report.ts"))}`;
+  const desired = hooksFor(root, bun);
+  const sharedHooks = (shared.hooks as Record<string, HookEntry[]> | undefined) ?? {};
+  for (const event of new Set([...Object.keys(desired), ...Object.keys(sharedHooks), ...Object.keys(hooks)])) {
+    const ours = desired[event] ?? [];
+    const installed = sharedHooks[event] ?? [];
+
     let inherited = false;
     for (const entry of installed) {
       for (const hook of entry.hooks ?? []) {
-        if (hook.type !== "command" || !generated(hook.command, "report.ts")) continue;
-        if ((hook.command !== legacy && hook.command !== ours[0]?.hooks[0]?.command) || matcher(entry.matcher) !== matcher(ours[0]?.matcher) ||
+        if (hook.type !== "command") continue;
+        const trusted = referencedCheckout(hook.command);
+        if (generated(hook.command, "budget.ts", trusted)) throw new Error(`Remove the retired shared budget hook for ${event}`);
+        const safe = hook.command === reporterCommand(trusted, bun) || hook.command === reporterCommand(trusted, "bun");
+        if (!generated(hook.command, "report.ts", trusted)) continue;
+        if (!ours.length || trusted !== root || !safe || matcher(entry.matcher) !== matcher(ours[0]?.matcher) ||
             inherited) {
           throw new Error(`Conflicting shared reporter for ${event}`);
         }
@@ -56,10 +93,14 @@ export function reportingHooks(settings: Json, root: string, bun: string, shared
       }
     }
     const local = (hooks[event] ?? []).flatMap((entry) => {
-      const other = entry.hooks.filter((hook) => hook.type !== "command" || (!generated(hook.command, "report.ts") && !generated(hook.command, "budget.ts")));
+      const other = entry.hooks.filter((hook) => {
+        if (hook.type !== "command") return true;
+        const checkout = referencedCheckout(hook.command);
+        return !generated(hook.command, "report.ts", checkout) && !generated(hook.command, "budget.ts", checkout);
+      });
       return other.length ? [{ ...entry, hooks: other }] : [];
     });
-    hooks[event] = inherited ? local : [...local, ...ours];
+    if (ours.length || hooks[event]) hooks[event] = inherited ? local : [...local, ...ours];
   }
   return hooks;
 }
