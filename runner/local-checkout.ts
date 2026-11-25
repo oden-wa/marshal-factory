@@ -1,4 +1,4 @@
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { eq } from "drizzle-orm";
@@ -49,7 +49,13 @@ async function addRepoDurable(path: string) {
 
 function hasT3Project(path: string) {
   const statePath = config.factory.t3StatePath ?? defaultStatePath();
-  return existsSync(statePath) && projectRegistered(path, statePath);
+  try {
+    statSync(statePath);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
+    throw error;
+  }
+  return projectRegistered(path, statePath);
 }
 
 async function ensureT3Project(path: string) {

@@ -187,20 +187,22 @@ try {
   const t3Calls: string[] = [];
   try {
     setStateProjects([]);
-    localHost.run = async (_command, args) => {
+    const successfulAdd = async (_command: string, args: string[]) => {
       const call = args.join(" ");
       t3Calls.push(call);
-      if (call.startsWith("project add")) return { stdout: "", stderr: "" };
+      if (args[0] === "project" && args[1] === "add" && args[2]) {
+        addStateProject(args[2]);
+        return { stdout: "", stderr: "" };
+      }
       throw new Error(`unexpected t3 call: ${call}`);
     };
+    localHost.run = successfulAdd;
     await original.ensureProject("/tmp/project-new");
     assert.deepEqual(t3Calls, ["project add /tmp/project-new --title project-new"]);
 
     t3Calls.length = 0;
     setStateProjects(["/tmp/project-present"]);
-    localHost.run = async (_command, args) => {
-      throw new Error(`unexpected t3 call: ${args.join(" ")}`);
-    };
+    localHost.run = successfulAdd;
     await original.ensureProject("/tmp/project-present");
     assert.equal(t3Calls.length, 0, "an existing T3 project is reused without project add");
 
