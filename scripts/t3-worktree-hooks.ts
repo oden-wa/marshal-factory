@@ -3,7 +3,7 @@ import { appendFileSync, existsSync, lstatSync, mkdirSync, readFileSync, realpat
 import { dirname, join, resolve } from "node:path";
 import { loadLimits } from "../lib/config";
 import { parseBranch } from "../lib/factory";
-import { json, withHooks } from "../lib/target-wiring";
+import { json, reportingHooks } from "../lib/target-wiring";
 
 // Invoked synchronously by T3's worktree setup action, before the first provider turn.
 const project = process.env.T3CODE_PROJECT_ROOT;
@@ -27,7 +27,9 @@ if (loadLimits().repos.some((repo) => resolve(repo) === resolve(project))) {
     const settings = existsSync(path) ? JSON.parse(readFileSync(path, "utf8")) : {};
     const shared = join(tree, ".claude/settings.json");
     const inherited = existsSync(shared) ? JSON.parse(readFileSync(shared, "utf8")) : {};
-    const content = json(withHooks(settings, resolve(import.meta.dirname, ".."), process.execPath, inherited));
+    const root = realpathSync(process.argv[2] ?? resolve(import.meta.dirname, ".."));
+    if (!existsSync(join(root, "hooks/report.ts"))) throw new Error("Missing factory reporter");
+    const content = json({ ...settings, hooks: reportingHooks(settings, root, process.execPath, inherited) });
     const exclude = git("rev-parse", "--path-format=absolute", "--git-path", "info/exclude");
     const pattern = "/" + local;
     if (!existsSync(exclude) || !readFileSync(exclude, "utf8").split("\n").includes(pattern)) {
@@ -36,7 +38,7 @@ if (loadLimits().repos.some((repo) => resolve(repo) === resolve(project))) {
     }
     git("check-ignore", "-q", "--", local);
     mkdirSync(dirname(path), { recursive: true });
-    const temporary = path + "." + process.pid;
+    const temporary = git("rev-parse", "--path-format=absolute", "--git-path", "marshal-settings-" + process.pid);
     writeFileSync(temporary, content, { mode: 0o600, flag: "wx" });
     renameSync(temporary, path);
   }

@@ -30,11 +30,12 @@ test("T3 installs only missing hooks in an ignored settings file in its own work
     assert.throws(() => setup(tree));
     assert.equal(existsSync(local), false);
     rmSync(join(tree, ".gitignore"));
-    const report = withHooks({}, "/factory").hooks as Record<string, unknown>;
+    const report = withHooks({}, join(import.meta.dirname, "..")).hooks as Record<string, unknown>;
     mkdirSync(join(tree, ".claude"));
     writeFileSync(join(tree, ".claude/settings.json"), JSON.stringify({hooks: {SessionStart: report.SessionStart}}));
     setup(tree);
     const first = readFileSync(local, "utf8");
+    assert.deepEqual(Object.keys(JSON.parse(first)), ["hooks"]);
     assert.equal(JSON.parse(first).hooks.SessionStart.length, 0);
     assert.equal(JSON.parse(first).hooks.SubagentStop.length, 1);
     setup(tree);

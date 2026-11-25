@@ -326,3 +326,8 @@ The script uses T3's project and worktree paths and the runner's
 into the worktree's private Claude settings before the first turn. Git's
 local exclude file keeps those settings out of job commits. The factory
 checkout and Bun binary must stay at the configured paths.
+
+When the setup script is staged in a separate checkout, pass the active
+factory checkout as its first argument. Shared hooks must use that reporter
+and the Claude process must have Bun on PATH. The setup action grants no MCP
+permissions.

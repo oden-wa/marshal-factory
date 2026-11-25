@@ -30,12 +30,22 @@ function hooksFor(root: string, bun: string): Record<string, HookEntry[]> {
 /** hooks/budget.ts counts as ours so rewiring a repo from before the cap was removed drops it. */
 const isOurs = (entry: HookEntry) => entry.hooks?.some((hook) => /hooks\/(report|budget)\.ts/.test(hook.command ?? ""));
 
-export function withHooks(settings: Json, root: string, bun = "bun", shared: Json = {}): Json {
+export function reportingHooks(settings: Json, root: string, bun: string, shared: Json = {}) {
   const hooks = { ...((settings.hooks as Record<string, HookEntry[]>) ?? {}) };
   for (const [event, ours] of Object.entries(hooksFor(root, bun))) {
     const installed = (shared.hooks as Record<string, HookEntry[]> | undefined)?.[event] ?? [];
-    const inherited = installed.some((entry) => (entry.matcher ?? "") === (ours[0]?.matcher ?? "") &&
-      entry.hooks?.some((hook) => hook.type === "command" && /\/hooks\/report\.ts["']?$/.test(hook.command)));
+    const legacy = `bun ${shellPath(join(root, "hooks/report.ts"))}`;
+    let inherited = false;
+    for (const entry of installed) {
+      for (const hook of entry.hooks ?? []) {
+        if (hook.type !== "command" || !/\/hooks\/report\.ts["']?$/.test(hook.command)) continue;
+        if ((entry.matcher ?? "") !== (ours[0]?.matcher ?? "") ||
+            (hook.command !== legacy && hook.command !== ours[0]?.hooks[0]?.command) || inherited) {
+          throw new Error(`Conflicting shared reporter for ${event}`);
+        }
+        inherited = true;
+      }
+    }
     const local = (hooks[event] ?? []).flatMap((entry) => {
       if (!isOurs(entry)) return [entry];
       const other = entry.hooks.filter((hook) => !isOurs({ hooks: [hook] }));
@@ -43,6 +53,11 @@ export function withHooks(settings: Json, root: string, bun = "bun", shared: Jso
     });
     hooks[event] = inherited ? local : [...local, ...ours];
   }
+  return hooks;
+}
+
+export function withHooks(settings: Json, root: string): Json {
+  const hooks = reportingHooks(settings, root, "bun");
   const permissions = (settings.permissions as Json) ?? {};
   const allow = new Set([...((permissions.allow as string[]) ?? []), REPORT_STAGE_TOOL]);
   const enabled = new Set([...((settings.enabledMcpjsonServers as string[]) ?? []), REPORT_SERVER]);
