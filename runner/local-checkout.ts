@@ -1,6 +1,6 @@
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import { eq } from "drizzle-orm";
 import { db } from "../db/client";
 import { repoSettings } from "../db/schema";
@@ -46,10 +46,24 @@ async function addRepoDurable(path: string) {
   if (added === "missing") throw new Error(`${CONFIG_PATH} does not exist, so the checkout would not survive a runner restart`);
 }
 
+const outputOf = (error: unknown) => {
+  const failure = error as { message?: string; stdout?: string; stderr?: string };
+  return [failure.message, failure.stdout, failure.stderr].filter(Boolean).join("\n");
+};
+
+async function ensureT3Project(path: string) {
+  try {
+    await localHost.run(localHost.t3, ["project", "add", path, "--title", basename(path)], { timeoutMs: 30_000 });
+  } catch (error) {
+    if (!/ProjectAlreadyExistsError|project already exists/i.test(outputOf(error))) throw error;
+  }
+}
+
 export const localCheckoutRuntime = {
   clone: cloneRepo,
   wire: (path: string) => wireTarget(path, FACTORY_ROOT, () => {}),
   addRepo: addRepoDurable,
+  ensureProject: ensureT3Project,
   origin: checkoutRepo,
   machine: thisMachine,
   now: () => new Date(),
@@ -128,6 +142,7 @@ export async function prepareRepoCheckout(repo: string) {
     if (!sameRepo(origin, repo)) throw new Error(`${path} is a checkout of ${origin}, not ${repo}`);
     await localCheckoutRuntime.wire(path);
     await localCheckoutRuntime.addRepo(path);
+    await localCheckoutRuntime.ensureProject(path);
     rememberCheckout(path);
     await updateLocalCheckout(repo, (current, now) =>
       current

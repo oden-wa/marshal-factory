@@ -22,6 +22,7 @@ const original = {
   clone: localCheckoutRuntime.clone,
   wire: localCheckoutRuntime.wire,
   addRepo: localCheckoutRuntime.addRepo,
+  ensureProject: localCheckoutRuntime.ensureProject,
   machine: localCheckoutRuntime.machine,
 };
 
@@ -47,12 +48,14 @@ try {
   const clones: string[] = [];
   const wired: string[] = [];
   const added: string[] = [];
+  const projects: string[] = [];
   localCheckoutRuntime.clone = async (repo, path) => {
     clones.push(`${repo} ${path}`);
     initRepo(path, repo);
   };
   localCheckoutRuntime.wire = (path) => void wired.push(path);
   localCheckoutRuntime.addRepo = async (path) => void added.push(path);
+  localCheckoutRuntime.ensureProject = async (path) => void projects.push(path);
   localCheckoutRuntime.machine = async () => ({ id: "test-machine", name: "test-runner", idFrom: "config" });
 
   const auto = `${NS}/auto`;
@@ -63,6 +66,7 @@ try {
   assert.deepEqual(clones, [`${auto} ${autoPath}`]);
   assert.deepEqual(wired, [autoPath]);
   assert.deepEqual(added, [autoPath]);
+  assert.deepEqual(projects, [autoPath], "the checkout is registered as a T3 project before it is ready");
   assert.deepEqual(config.factory.repos, [autoPath]);
   let checkout = await detail(auto);
   assert.deepEqual([checkout?.state, checkout?.machine, checkout?.path, checkout?.failure], ["ready", "test-runner", autoPath, undefined]);
@@ -95,6 +99,18 @@ try {
   const adopted = await prepareRepoCheckout(existing);
   assert.deepEqual([adopted.state, adopted.cloned, adopted.path], ["ready", false, existingPath], "a manually installed target is adopted");
   assert.equal(clones.length, 1);
+  assert.deepEqual(projects, [autoPath, existingPath], "an adopted target also gets a T3 project");
+
+  const projectless = `${NS}/projectless`;
+  await insert(projectless);
+  localCheckoutRuntime.ensureProject = async () => {
+    throw new Error("t3 project add failed");
+  };
+  await assert.rejects(prepareRepoCheckout(projectless), /t3 project add failed/);
+  checkout = await detail(projectless);
+  assert.equal(checkout?.state, "failed");
+  assert.match(checkout?.failure?.reason ?? "", /t3 project add failed/);
+  localCheckoutRuntime.ensureProject = async (path) => void projects.push(path);
 
   const broken = `${NS}/broken`;
   await insert(broken);
@@ -138,5 +154,6 @@ try {
   localCheckoutRuntime.clone = original.clone;
   localCheckoutRuntime.wire = original.wire;
   localCheckoutRuntime.addRepo = original.addRepo;
+  localCheckoutRuntime.ensureProject = original.ensureProject;
   localCheckoutRuntime.machine = original.machine;
 }
