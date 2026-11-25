@@ -10,6 +10,7 @@ import { localHost } from "../lib/host";
 import { addRepoToFactoryConfig, wireTarget } from "../lib/install-target";
 import { parseDetail, type LocalCheckout } from "../lib/onboarding";
 import { repoName } from "../lib/repo-name";
+import { defaultStatePath, projectRegistered } from "../lib/t3-state";
 import { checkoutRepo } from "../lib/worktrees";
 import { config } from "./config";
 import { thisMachine } from "./heartbeat";
@@ -46,13 +47,9 @@ async function addRepoDurable(path: string) {
   if (added === "missing") throw new Error(`${CONFIG_PATH} does not exist, so the checkout would not survive a runner restart`);
 }
 
-async function hasT3Project(path: string) {
-  try {
-    await localHost.run(localHost.t3, ["thread", "list", "--project", path, "--json"], { timeoutMs: 5_000 });
-    return true;
-  } catch {
-    return false;
-  }
+function hasT3Project(path: string) {
+  const statePath = config.factory.t3StatePath ?? defaultStatePath();
+  return existsSync(statePath) && projectRegistered(path, statePath);
 }
 
 async function ensureT3Project(path: string) {

@@ -25,6 +25,7 @@ const original = {
   addRepo: localCheckoutRuntime.addRepo,
   ensureProject: localCheckoutRuntime.ensureProject,
   machine: localCheckoutRuntime.machine,
+  t3StatePath: config.factory.t3StatePath,
 };
 
 const initRepo = (path: string, repo: string) => {
@@ -50,13 +51,23 @@ try {
   const wired: string[] = [];
   const added: string[] = [];
   const projects: string[] = [];
+  const operations: string[] = [];
   localCheckoutRuntime.clone = async (repo, path) => {
     clones.push(`${repo} ${path}`);
     initRepo(path, repo);
   };
-  localCheckoutRuntime.wire = (path) => void wired.push(path);
-  localCheckoutRuntime.addRepo = async (path) => void added.push(path);
-  localCheckoutRuntime.ensureProject = async (path) => void projects.push(path);
+  localCheckoutRuntime.wire = (path) => {
+    wired.push(path);
+    operations.push(`wire:${path}`);
+  };
+  localCheckoutRuntime.addRepo = async (path) => {
+    added.push(path);
+    operations.push(`repo:${path}`);
+  };
+  localCheckoutRuntime.ensureProject = async (path) => {
+    projects.push(path);
+    operations.push(`project:${path}`);
+  };
   localCheckoutRuntime.machine = async () => ({ id: "test-machine", name: "test-runner", idFrom: "config" });
 
   const auto = `${NS}/auto`;
@@ -68,6 +79,7 @@ try {
   assert.deepEqual(wired, [autoPath]);
   assert.deepEqual(added, [autoPath]);
   assert.deepEqual(projects, [autoPath], "the checkout is registered as a T3 project before it is ready");
+  assert.deepEqual(operations.slice(0, 3), [`wire:${autoPath}`, `project:${autoPath}`, `repo:${autoPath}`], "T3 registration finishes before the repo is persisted");
   assert.deepEqual(config.factory.repos, [autoPath]);
   let checkout = await detail(auto);
   assert.deepEqual([checkout?.state, checkout?.machine, checkout?.path, checkout?.failure], ["ready", "test-runner", autoPath, undefined]);
@@ -111,7 +123,10 @@ try {
   checkout = await detail(projectless);
   assert.equal(checkout?.state, "failed");
   assert.match(checkout?.failure?.reason ?? "", /t3 project add failed/);
-  localCheckoutRuntime.ensureProject = async (path) => void projects.push(path);
+  localCheckoutRuntime.ensureProject = async (path) => {
+    projects.push(path);
+    operations.push(`project:${path}`);
+  };
 
   const broken = `${NS}/broken`;
   await insert(broken);
@@ -148,51 +163,78 @@ try {
   assert.throws(() => wireTarget(linkedRepo, resolve("."), () => {}), /refusing to wire a symbolic link/, "a symlinked destination is refused");
   assert.equal(existsSync(join(outside, "settings.json")), false, "and nothing is written through it");
 
+  const { Database } = await import("bun:sqlite");
+  const statePath = join(root, "t3-state.sqlite");
+  config.factory.t3StatePath = statePath;
+  const openState = () => {
+    const state = new Database(statePath);
+    state.query("create table if not exists projection_projects (project_id text, title text, workspace_root text, deleted_at text)").all();
+    return state;
+  };
+  const setStateProjects = (paths: string[]) => {
+    const state = openState();
+    state.query("delete from projection_projects").run();
+    paths.forEach((path, index) => state.query("insert into projection_projects values (?, ?, ?, null)").run(`p${index}`, path, path));
+    state.close();
+  };
+  const addStateProject = (path: string) => {
+    const state = openState();
+    state.query("insert into projection_projects values (?, ?, ?, null)").run(`p-${path}`, path, path);
+    state.close();
+  };
 
   const originalRun = localHost.run;
   const t3Calls: string[] = [];
   try {
+    setStateProjects([]);
     localHost.run = async (_command, args) => {
       const call = args.join(" ");
       t3Calls.push(call);
-      if (call.startsWith("thread list")) throw new Error("No T3 Code project matches");
       if (call.startsWith("project add")) return { stdout: "", stderr: "" };
       throw new Error(`unexpected t3 call: ${call}`);
     };
     await original.ensureProject("/tmp/project-new");
-    assert.deepEqual(t3Calls, ["thread list --project /tmp/project-new --json", "project add /tmp/project-new --title project-new"]);
+    assert.deepEqual(t3Calls, ["project add /tmp/project-new --title project-new"]);
 
     t3Calls.length = 0;
+    setStateProjects(["/tmp/project-present"]);
     localHost.run = async (_command, args) => {
-      const call = args.join(" ");
-      t3Calls.push(call);
-      return { stdout: "[]", stderr: "" };
+      throw new Error(`unexpected t3 call: ${args.join(" ")}`);
     };
     await original.ensureProject("/tmp/project-present");
-    assert.deepEqual(t3Calls, ["thread list --project /tmp/project-present --json"], "an existing T3 project is reused");
+    assert.equal(t3Calls.length, 0, "an existing T3 project is reused without project add");
 
     t3Calls.length = 0;
-    let probes = 0;
+    setStateProjects([]);
     localHost.run = async (_command, args) => {
       const call = args.join(" ");
       t3Calls.push(call);
-      if (call.startsWith("thread list")) {
-        probes += 1;
-        if (probes === 1) throw new Error("No T3 Code project matches");
-        return { stdout: "[]", stderr: "" };
+      if (call.startsWith("project add")) {
+        addStateProject(args[2]!);
+        throw new Error("project mutation returned an error");
       }
-      if (call.startsWith("project add")) throw new Error("ProjectAlreadyExistsError: An active project already exists");
       throw new Error(`unexpected t3 call: ${call}`);
     };
     await original.ensureProject("/tmp/project-race");
-    assert.deepEqual(t3Calls.filter((call) => call.startsWith("project add")).length, 1, "a registration race is confirmed by probing T3");
+    assert.deepEqual(t3Calls.filter((call) => call.startsWith("project add")).length, 1, "a registration visible in T3 state is accepted even when the mutation errors");
 
+    setStateProjects([]);
     localHost.run = async (_command, args) => {
       const call = args.join(" ");
       if (call.startsWith("project add")) throw new Error("permission denied");
-      throw new Error("No T3 Code project matches");
+      throw new Error(`unexpected t3 call: ${call}`);
     };
     await assert.rejects(original.ensureProject("/tmp/project-failure"), /permission denied/, "an unconfirmed registration failure is not swallowed");
+
+    writeFileSync(statePath, "not sqlite");
+    t3Calls.length = 0;
+    localHost.run = async (_command, args) => {
+      const call = args.join(" ");
+      t3Calls.push(call);
+      return { stdout: "", stderr: "" };
+    };
+    await assert.rejects(original.ensureProject("/tmp/project-unknown"));
+    assert.equal(t3Calls.length, 0, "an unreadable T3 state is unknown, not proof that the project is missing");
   } finally {
     localHost.run = originalRun;
   }
@@ -206,4 +248,5 @@ try {
   localCheckoutRuntime.addRepo = original.addRepo;
   localCheckoutRuntime.ensureProject = original.ensureProject;
   localCheckoutRuntime.machine = original.machine;
+  config.factory.t3StatePath = original.t3StatePath;
 }

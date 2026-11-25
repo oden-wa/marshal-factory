@@ -212,7 +212,7 @@ Per repo, a default harness and place apply when the ticket has no Harness or Ru
 
 To add a repo, click **Add repository** on the Repositories page and pick one of the repos the GitHub App can reach. **Grant access to more repositories** opens the App's installation settings when the one you want is missing. Choose its initial setup:
 
-- **Local checkout first**: a runner clones the repo under `factory.checkoutRoot` when it has no checkout yet, wires it like `install-target`, adds it to `factory.repos`, registers it as a T3 project, and sets the repo's default place to Local. It does not commit or push the wiring; as with `install-target`, the wiring reaches fresh job worktrees once it is on `main`. Cloud onboarding does not start; use **Onboard** in the repo's detail pane later when you want it.
+- **Local checkout first**: a runner clones the repo under `factory.checkoutRoot` when it has no checkout yet, wires it like `install-target`, registers it as a T3 project, adds it to `factory.repos`, and sets the repo's default place to Local. It does not commit or push the wiring; as with `install-target`, the wiring reaches fresh job worktrees once it is on `main`. Cloud onboarding does not start; use **Onboard** in the repo's detail pane later when you want it.
 - **Cloud sandbox onboarding**: the factory onboards it without you:
 
   1. If the repo's `main` has a `.factory/setup.json`, the factory uses it. Otherwise an agent reads the repo in a Modal sandbox, writes that setup recipe, runs the setup and every check until they pass, and opens a pull request titled **Add the factory setup recipe**. Merge it when it looks right.
