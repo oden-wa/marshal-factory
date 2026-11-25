@@ -83,6 +83,8 @@ test("mutable shared reporter aliases are rejected, disabled hooks and retired b
     const shared = withHooks({}, alias);
     assert.equal(reportingHooks({}, root + "/", process.execPath, withHooks({}, root)).SessionStart?.length, 0);
     assert.throws(() => reportingHooks({}, root, process.execPath, shared), /Conflicting/);
+    const oldLocal = {hooks: {SessionStart: [{hooks: [{type: "command", command: `bun "${alias}/hooks/report.ts"`}]}]}};
+    assert.deepEqual(reportingHooks(oldLocal, root, process.execPath), reportingHooks({}, root, process.execPath));
     assert.throws(() => reportingHooks({}, "relative/factory", process.execPath), /absolute path/);
     assert.throws(() => reportingHooks({}, root, process.execPath, {disableAllHooks: true}), /disableAllHooks/);
     assert.doesNotThrow(() => reportingHooks({disableAllHooks: false}, root, process.execPath, {disableAllHooks: true}));
@@ -94,9 +96,9 @@ test("mutable shared reporter aliases are rejected, disabled hooks and retired b
 });
 
 test("Bun upgrades replace old local reporters and flag stale shared reporters", () => {
-  const old = {hooks: reportingHooks({}, "/factory/", "/old/bin/bun")};
+  const old = {hooks: reportingHooks({}, "/factory/", "/old/bin/bun-canary")};
   const current = reportingHooks(old, "/factory", "/new/bin/bun");
   assert.deepEqual(current, reportingHooks({}, "/factory", "/new/bin/bun"));
   assert.throws(() => reportingHooks({}, "/factory", "/new/bin/bun", old), /Conflicting/);
-  assert.equal(reportingHooks({}, "/factory", "/old/bin/bun", old).SessionStart?.length, 0);
+  assert.equal(reportingHooks({}, "/factory", "/old/bin/bun-canary", old).SessionStart?.length, 0);
 });

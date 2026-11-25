@@ -45,14 +45,27 @@ export function reportingHooks(settings: Json, factoryRoot: string, bun: string,
   // Match the complete invocation and exact reporter path, including legacy path quoting.
   function generated(command: string, script: string, checkout = root) {
     const prefix = reporterPrefix(checkout);
-    if (script === "report.ts" && command.startsWith(prefix)) command = command.slice(prefix.length);
+    const wrapped = script === "report.ts" && command.startsWith(prefix);
+    if (wrapped) command = command.slice(prefix.length);
     const path = join(checkout, "hooks", script);
     for (const arg of new Set([shellPath(path), '"' + path + '"'])) {
       if (!command.endsWith(" " + arg)) continue;
       const executable = command.slice(0, -arg.length - 1);
+      if (wrapped && /^"\/(?:\\["\\$`]|[^"\\$`])*"$/.test(executable)) return true;
       if (executable === "bun" || /^"\/[^"]*\/bun"$/.test(executable) || /^'\/[^']*\/bun'$/.test(executable) || executable === shellPath(bun)) return true;
     }
     return false;
+  }
+  function referencedCheckout(command: string) {
+    const argument = /"((?:\\.|[^"\\])+)\/hooks\/(report|budget)\.ts"$/.exec(command);
+    const alias = argument?.[1]?.replace(/\\(["\\$`])/g, "$1");
+    let trusted = root;
+    if (alias && alias !== root && alias.startsWith("/")) {
+      try {
+        if (realpathSync(alias) === realpathSync(root)) trusted = alias;
+      } catch { /* An unrelated checkout may not exist on this host. */ }
+    }
+    return trusted;
   }
   const matcher = (value?: string) => value === "*" || value === ".*" ? "" : value ?? "";
   const desired = hooksFor(root, bun);
@@ -65,15 +78,7 @@ export function reportingHooks(settings: Json, factoryRoot: string, bun: string,
     for (const entry of installed) {
       for (const hook of entry.hooks ?? []) {
         if (hook.type !== "command") continue;
-        // A shared configuration can name the same installation through a symlink.
-        const argument = /"((?:\\.|[^"\\])+)\/hooks\/(report|budget)\.ts"$/.exec(hook.command);
-        const alias = argument?.[1]?.replace(/\\(["\\$`])/g, "$1");
-        let trusted = root;
-        if (alias && alias !== root && alias.startsWith("/")) {
-          try {
-            if (realpathSync(alias) === realpathSync(root)) trusted = alias;
-          } catch { /* An unrelated checkout may not exist on this host. */ }
-        }
+        const trusted = referencedCheckout(hook.command);
         if (generated(hook.command, "budget.ts", trusted)) throw new Error(`Remove the retired shared budget hook for ${event}`);
         const safe = hook.command === reporterCommand(trusted, bun) || hook.command === reporterCommand(trusted, "bun");
         if (!generated(hook.command, "report.ts", trusted)) continue;
@@ -85,7 +90,11 @@ export function reportingHooks(settings: Json, factoryRoot: string, bun: string,
       }
     }
     const local = (hooks[event] ?? []).flatMap((entry) => {
-      const other = entry.hooks.filter((hook) => hook.type !== "command" || (!generated(hook.command, "report.ts") && !generated(hook.command, "budget.ts")));
+      const other = entry.hooks.filter((hook) => {
+        if (hook.type !== "command") return true;
+        const checkout = referencedCheckout(hook.command);
+        return !generated(hook.command, "report.ts", checkout) && !generated(hook.command, "budget.ts", checkout);
+      });
       return other.length ? [{ ...entry, hooks: other }] : [];
     });
     if (ours.length || hooks[event]) hooks[event] = inherited ? local : [...local, ...ours];
