@@ -55,7 +55,7 @@ async function hasT3Project(path: string) {
   }
 }
 
-export async function ensureT3Project(path: string) {
+async function ensureT3Project(path: string) {
   if (await hasT3Project(path)) return;
   try {
     await localHost.run(localHost.t3, ["project", "add", path, "--title", basename(path)], { timeoutMs: 30_000 });
