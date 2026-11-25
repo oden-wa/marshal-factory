@@ -27,28 +27,28 @@ function hooksFor(root: string, bun: string): Record<string, HookEntry[]> {
   };
 }
 
-/** hooks/budget.ts counts as ours so rewiring a repo from before the cap was removed drops it. */
-const isOurs = (entry: HookEntry) => entry.hooks?.some((hook) => /hooks\/(report|budget)\.ts/.test(hook.command ?? ""));
-
 export function reportingHooks(settings: Json, root: string, bun: string, shared: Json = {}) {
   const hooks = { ...((settings.hooks as Record<string, HookEntry[]>) ?? {}) };
+  const managed = new Set<string>();
+  for (const script of ["report.ts", "budget.ts"]) {
+    for (const executable of ["bun", shellPath(bun)]) managed.add(`${executable} ${shellPath(join(root, "hooks", script))}`);
+  }
   for (const [event, ours] of Object.entries(hooksFor(root, bun))) {
     const installed = (shared.hooks as Record<string, HookEntry[]> | undefined)?.[event] ?? [];
     const legacy = `bun ${shellPath(join(root, "hooks/report.ts"))}`;
     let inherited = false;
     for (const entry of installed) {
       for (const hook of entry.hooks ?? []) {
-        if (hook.type !== "command" || !/\/hooks\/report\.ts["']?$/.test(hook.command)) continue;
+        if (hook.type !== "command" || (hook.command !== legacy && hook.command !== ours[0]?.hooks[0]?.command)) continue;
         if ((entry.matcher ?? "") !== (ours[0]?.matcher ?? "") ||
-            (hook.command !== legacy && hook.command !== ours[0]?.hooks[0]?.command) || inherited) {
+            inherited) {
           throw new Error(`Conflicting shared reporter for ${event}`);
         }
         inherited = true;
       }
     }
     const local = (hooks[event] ?? []).flatMap((entry) => {
-      if (!isOurs(entry)) return [entry];
-      const other = entry.hooks.filter((hook) => !isOurs({ hooks: [hook] }));
+      const other = entry.hooks.filter((hook) => hook.type !== "command" || !managed.has(hook.command));
       return other.length ? [{ ...entry, hooks: other }] : [];
     });
     hooks[event] = inherited ? local : [...local, ...ours];

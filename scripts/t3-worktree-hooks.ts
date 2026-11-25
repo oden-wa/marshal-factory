@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { appendFileSync, existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, renameSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { loadLimits } from "../lib/config";
 import { parseBranch } from "../lib/factory";
@@ -24,22 +24,35 @@ if (loadLimits().repos.some((repo) => resolve(repo) === resolve(project))) {
       throw new Error("Refusing to write Claude settings through a symbolic link");
     }
     if (git("ls-files", "--", local)) throw new Error("The repository tracks Claude's local settings");
-    const settings = existsSync(path) ? JSON.parse(readFileSync(path, "utf8")) : {};
+    function readSettings(file: string) {
+      const stat = lstatSync(file, { throwIfNoEntry: false });
+      if (!stat) return {};
+      if (!stat.isFile()) throw new Error("Expected a regular Claude settings file");
+      return JSON.parse(readFileSync(file, "utf8"));
+    }
+    const settings = readSettings(path);
     const shared = join(tree, ".claude/settings.json");
-    const inherited = existsSync(shared) ? JSON.parse(readFileSync(shared, "utf8")) : {};
+    const inherited = readSettings(shared);
     const root = realpathSync(process.argv[2] ?? resolve(import.meta.dirname, ".."));
     if (!existsSync(join(root, "hooks/report.ts"))) throw new Error("Missing factory reporter");
     const content = json({ ...settings, hooks: reportingHooks(settings, root, process.execPath, inherited) });
     const exclude = git("rev-parse", "--path-format=absolute", "--git-path", "info/exclude");
-    const pattern = "/" + local;
-    if (!existsSync(exclude) || !readFileSync(exclude, "utf8").split("\n").includes(pattern)) {
+    const rules = existsSync(exclude) ? readFileSync(exclude, "utf8").split("\n") : [];
+    const missing = ["/" + local, "/" + local + ".marshal-*"].filter((rule) => !rules.includes(rule));
+    if (missing.length) {
       mkdirSync(dirname(exclude), { recursive: true });
-      appendFileSync(exclude, "\n" + pattern + "\n");
+      appendFileSync(exclude, "\n" + missing.join("\n") + "\n");
     }
+    const staging = local + ".marshal-" + crypto.randomUUID();
     git("check-ignore", "-q", "--", local);
+    git("check-ignore", "-q", "--", staging);
     mkdirSync(dirname(path), { recursive: true });
-    const temporary = git("rev-parse", "--path-format=absolute", "--git-path", "marshal-settings-" + process.pid);
-    writeFileSync(temporary, content, { mode: 0o600, flag: "wx" });
-    renameSync(temporary, path);
+    const temporary = join(tree, staging);
+    try {
+      writeFileSync(temporary, content, { mode: 0o600, flag: "wx" });
+      renameSync(temporary, path);
+    } finally {
+      rmSync(temporary, { force: true });
+    }
   }
 }
