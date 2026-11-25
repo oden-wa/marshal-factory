@@ -64,8 +64,20 @@ export const runSchema = z.object({
 });
 export type OnboardingRun = z.infer<typeof runSchema>;
 
+/** A local-first checkout the runner is cloning and wiring for the repo. */
+export const localCheckoutSchema = z.object({
+  state: z.enum(["preparing", "ready", "failed"]),
+  requestedAt: z.string(),
+  updatedAt: z.string(),
+  machine: z.string().optional(),
+  path: z.string().optional(),
+  failure: z.object({ reason: z.string(), at: z.string() }).optional(),
+});
+export type LocalCheckout = z.infer<typeof localCheckoutSchema>;
+
 export const onboardingDetailSchema = z.object({
   recipe: recipeSchema.optional(),
+  localCheckout: localCheckoutSchema.optional(),
   /** Where the recipe came from: the repo's main, or an agent's PR not merged yet. */
   recipeSource: z.enum(["committed", "agent"]).optional(),
   recipePr: z.string().optional(),

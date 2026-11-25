@@ -282,6 +282,7 @@ export const intentKind = pgEnum("intent_kind", [
   "close_job",
   "onboard_repo",
   "rebuild_repo_image",
+  "prepare_repo_checkout",
   "repo_push",
   "retry_stop",
   "retry_job",
@@ -294,8 +295,8 @@ export const intentKind = pgEnum("intent_kind", [
  * The panel records open_t3 itself; its result holds a one-time T3 pairing link until the panel
  * shows it or it expires. The inbox records approve_merge, request_changes and close_job; a
  * human's GitHub review records request_changes too. Their detail is JSON; see lib/inbox.ts.
- * The Repositories page records onboard_repo and rebuild_repo_image with the repo as detail; a push
- * to a default branch records repo_push with the repo and the changed files (lib/webhooks.ts).
+ * The Repositories page records onboard_repo, rebuild_repo_image and prepare_repo_checkout with the
+ * repo as detail; a push to a default branch records repo_push with the repo and the changed files (lib/webhooks.ts).
  * Settings records slack_test with the owner as detail; a runner with a Slack token posts the test message.
  */
 export const intents = pgTable(
