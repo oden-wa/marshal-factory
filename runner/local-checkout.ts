@@ -1,6 +1,6 @@
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import { eq } from "drizzle-orm";
 import { db } from "../db/client";
 import { repoSettings } from "../db/schema";
@@ -10,6 +10,7 @@ import { localHost } from "../lib/host";
 import { addRepoToFactoryConfig, wireTarget } from "../lib/install-target";
 import { parseDetail, type LocalCheckout } from "../lib/onboarding";
 import { repoName } from "../lib/repo-name";
+import { defaultStatePath, projectRegistered } from "../lib/t3-state";
 import { checkoutRepo } from "../lib/worktrees";
 import { config } from "./config";
 import { thisMachine } from "./heartbeat";
@@ -46,10 +47,31 @@ async function addRepoDurable(path: string) {
   if (added === "missing") throw new Error(`${CONFIG_PATH} does not exist, so the checkout would not survive a runner restart`);
 }
 
+function hasT3Project(path: string) {
+  const statePath = config.factory.t3StatePath ?? defaultStatePath();
+  try {
+    statSync(statePath);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
+    throw error;
+  }
+  return projectRegistered(path, statePath);
+}
+
+async function ensureT3Project(path: string) {
+  if (await hasT3Project(path)) return;
+  try {
+    await localHost.run(localHost.t3, ["project", "add", path, "--title", basename(path)], { timeoutMs: 30_000 });
+  } catch (error) {
+    if (!(await hasT3Project(path))) throw error;
+  }
+}
+
 export const localCheckoutRuntime = {
   clone: cloneRepo,
   wire: (path: string) => wireTarget(path, FACTORY_ROOT, () => {}),
   addRepo: addRepoDurable,
+  ensureProject: ensureT3Project,
   origin: checkoutRepo,
   machine: thisMachine,
   now: () => new Date(),
@@ -127,6 +149,7 @@ export async function prepareRepoCheckout(repo: string) {
     const origin = await localCheckoutRuntime.origin(path);
     if (!sameRepo(origin, repo)) throw new Error(`${path} is a checkout of ${origin}, not ${repo}`);
     await localCheckoutRuntime.wire(path);
+    await localCheckoutRuntime.ensureProject(path);
     await localCheckoutRuntime.addRepo(path);
     rememberCheckout(path);
     await updateLocalCheckout(repo, (current, now) =>

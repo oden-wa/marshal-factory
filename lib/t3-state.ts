@@ -36,6 +36,16 @@ function readProjectsFromSqlite(statePath: string): T3Project[] {
   }
 }
 
+/** Whether T3's state database has a live project at exactly this workspace root. */
+export function projectRegistered(path: string, statePath = defaultStatePath()) {
+  const state = new Database(statePath, { readonly: true });
+  try {
+    return Boolean(state.query("select 1 as found from projection_projects where workspace_root = ? and deleted_at is null limit 1").get(path));
+  } finally {
+    state.close();
+  }
+}
+
 export async function probeProject(path: string) {
   forbidInTest("t3 thread list");
   await run(T3(), ["thread", "list", "--project", path, "--json"], { timeout: CLI_TIMEOUT_MS, maxBuffer: 16 * 1024 * 1024 });
