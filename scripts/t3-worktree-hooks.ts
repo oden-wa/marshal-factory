@@ -15,6 +15,9 @@ if (loadLimits().repos.some((repo) => resolve(repo) === resolve(project))) {
     if (realpathSync(tree) !== realpathSync(git("rev-parse", "--show-toplevel")) || realpathSync(tree) === realpathSync(project)) {
       throw new Error("Expected a separate T3 worktree");
     }
+    const commonDir = ["rev-parse", "--path-format=absolute", "--git-common-dir"];
+    const projectGit = execFileSync("git", ["-C", project, ...commonDir], { encoding: "utf8" }).trim();
+    if (realpathSync(projectGit) !== realpathSync(git(...commonDir))) throw new Error("Worktree belongs to another repository");
     const local = ".claude/settings.local.json";
     const path = join(tree, local);
     if ([dirname(path), path].some((p) => lstatSync(p, { throwIfNoEntry: false })?.isSymbolicLink())) {
@@ -22,13 +25,16 @@ if (loadLimits().repos.some((repo) => resolve(repo) === resolve(project))) {
     }
     if (git("ls-files", "--", local)) throw new Error("The repository tracks Claude's local settings");
     const settings = existsSync(path) ? JSON.parse(readFileSync(path, "utf8")) : {};
-    const content = json(withHooks(settings, resolve(import.meta.dirname, ".."), "'" + process.execPath.replaceAll("'", "'\\''") + "'"));
+    const shared = join(tree, ".claude/settings.json");
+    const inherited = existsSync(shared) ? JSON.parse(readFileSync(shared, "utf8")) : {};
+    const content = json(withHooks(settings, resolve(import.meta.dirname, ".."), process.execPath, inherited));
     const exclude = git("rev-parse", "--path-format=absolute", "--git-path", "info/exclude");
     const pattern = "/" + local;
     if (!existsSync(exclude) || !readFileSync(exclude, "utf8").split("\n").includes(pattern)) {
       mkdirSync(dirname(exclude), { recursive: true });
       appendFileSync(exclude, "\n" + pattern + "\n");
     }
+    git("check-ignore", "-q", "--", local);
     mkdirSync(dirname(path), { recursive: true });
     const temporary = path + "." + process.pid;
     writeFileSync(temporary, content, { mode: 0o600, flag: "wx" });

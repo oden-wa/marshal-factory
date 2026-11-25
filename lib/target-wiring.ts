@@ -11,8 +11,12 @@ type HookEntry = {
 };
 
 /** Ours, per event, in order. PostToolUse takes every tool so the reporter can send usage snapshots. */
+function shellPath(path: string) {
+  return '"' + path.replace(/["\\$`]/g, "\\$&") + '"';
+}
+
 function hooksFor(root: string, bun: string): Record<string, HookEntry[]> {
-  const reporter = { type: "command", command: `${bun} "${join(root, "hooks/report.ts")}"`, async: true, timeout: 20 };
+  const reporter = { type: "command", command: `${bun === "bun" ? bun : shellPath(bun)} ${shellPath(join(root, "hooks/report.ts"))}`, async: true, timeout: 20 };
   return {
     SessionStart: [{ hooks: [reporter] }],
     PreToolUse: [{ matcher: "Agent", hooks: [reporter] }],
@@ -26,10 +30,18 @@ function hooksFor(root: string, bun: string): Record<string, HookEntry[]> {
 /** hooks/budget.ts counts as ours so rewiring a repo from before the cap was removed drops it. */
 const isOurs = (entry: HookEntry) => entry.hooks?.some((hook) => /hooks\/(report|budget)\.ts/.test(hook.command ?? ""));
 
-export function withHooks(settings: Json, root: string, bun = "bun"): Json {
+export function withHooks(settings: Json, root: string, bun = "bun", shared: Json = {}): Json {
   const hooks = { ...((settings.hooks as Record<string, HookEntry[]>) ?? {}) };
   for (const [event, ours] of Object.entries(hooksFor(root, bun))) {
-    hooks[event] = [...(hooks[event] ?? []).filter((entry) => !isOurs(entry)), ...ours];
+    const installed = (shared.hooks as Record<string, HookEntry[]> | undefined)?.[event] ?? [];
+    const inherited = installed.some((entry) => (entry.matcher ?? "") === (ours[0]?.matcher ?? "") &&
+      entry.hooks?.some((hook) => hook.type === "command" && /\/hooks\/report\.ts["']?$/.test(hook.command)));
+    const local = (hooks[event] ?? []).flatMap((entry) => {
+      if (!isOurs(entry)) return [entry];
+      const other = entry.hooks.filter((hook) => !isOurs({ hooks: [hook] }));
+      return other.length ? [{ ...entry, hooks: other }] : [];
+    });
+    hooks[event] = inherited ? local : [...local, ...ours];
   }
   const permissions = (settings.permissions as Json) ?? {};
   const allow = new Set([...((permissions.allow as string[]) ?? []), REPORT_STAGE_TOOL]);
