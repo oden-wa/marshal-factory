@@ -90,3 +90,11 @@ test("shared reporter aliases are inherited, disabled hooks and retired budget h
     rmSync(dir, {recursive: true, force: true});
   }
 });
+
+test("Bun upgrades replace old local reporters and flag stale shared reporters", () => {
+  const old = {hooks: reportingHooks({}, "/factory/", "/old/bin/bun")};
+  const current = reportingHooks(old, "/factory", "/new/bin/bun");
+  assert.deepEqual(current, reportingHooks({}, "/factory", "/new/bin/bun"));
+  assert.throws(() => reportingHooks({}, "/factory", "/new/bin/bun", old), /Conflicting/);
+  assert.equal(reportingHooks({}, "/factory", "/old/bin/bun", old).SessionStart?.length, 0);
+});

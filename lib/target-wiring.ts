@@ -16,8 +16,12 @@ function shellPath(path: string) {
   return '"' + path.replace(/["\\$`]/g, "\\$&") + '"';
 }
 
+function reporterPrefix(root: string) {
+  return `export FACTORY_HOOK_CWD="$PWD" && cd ${shellPath(join(root, "."))} && exec `;
+}
+
 function reporterCommand(root: string, bun: string) {
-  return `export FACTORY_HOOK_CWD="$PWD" && cd ${shellPath(root)} && exec ${bun === "bun" ? bun : shellPath(bun)} ${shellPath(join(root, "hooks/report.ts"))}`;
+  return `${reporterPrefix(root)}${bun === "bun" ? bun : shellPath(bun)} ${shellPath(join(root, "hooks/report.ts"))}`;
 }
 
 function hooksFor(root: string, bun: string): Record<string, HookEntry[]> {
@@ -38,7 +42,8 @@ export function reportingHooks(settings: Json, root: string, bun: string, shared
   // Earlier installers quoted the absolute Bun binary with either kind of quote.
   // Match the complete invocation and exact reporter path, including legacy path quoting.
   function generated(command: string, script: string, checkout = root) {
-    if (script === "report.ts" && (command === reporterCommand(checkout, bun) || command === reporterCommand(checkout, "bun"))) return true;
+    const prefix = reporterPrefix(checkout);
+    if (script === "report.ts" && command.startsWith(prefix)) command = command.slice(prefix.length);
     const path = join(checkout, "hooks", script);
     for (const arg of new Set([shellPath(path), '"' + path + '"'])) {
       if (!command.endsWith(" " + arg)) continue;
