@@ -1,7 +1,7 @@
 import "./test-guard";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { eq } from "drizzle-orm";
@@ -70,6 +70,23 @@ try {
   await prepareRepoCheckout(auto);
   assert.equal(clones.length, 1, "a retried intent reuses the checkout it already made");
 
+  const firstRoot = config.factory.checkoutRoot;
+  const firstClone = localCheckoutRuntime.clone;
+  const firstMachine = localCheckoutRuntime.machine;
+  config.factory.repos = [];
+  config.factory.checkoutRoot = join(root, "another-machine");
+  localCheckoutRuntime.clone = async () => {
+    throw new Error("a completed checkout must not be retried");
+  };
+  localCheckoutRuntime.machine = async () => ({ id: "other-machine", name: "other-runner", idFrom: "config" });
+  assert.deepEqual(await prepareRepoCheckout(auto), { repo: auto, skipped: "no pending checkout" }, "a completed checkout is not retried on another runner");
+  checkout = await detail(auto);
+  assert.deepEqual([checkout?.state, checkout?.machine, checkout?.failure], ["ready", "test-runner", undefined], "and the retry does not overwrite the completed state");
+  config.factory.repos = [autoPath];
+  config.factory.checkoutRoot = firstRoot;
+  localCheckoutRuntime.clone = firstClone;
+  localCheckoutRuntime.machine = firstMachine;
+
   const existing = `${NS}/existing`;
   const existingPath = join(root, "installed-existing");
   initRepo(existingPath, existing);
@@ -105,6 +122,14 @@ try {
   assert.ok(readFileSync(join(wireRepo, ".claude/settings.json"), "utf8").includes("hooks/report.ts"));
   assert.ok(readFileSync(join(wireRepo, ".mcp.json"), "utf8").includes("factory-report"));
   assert.ok(existsSync(join(wireRepo, ".agents/playbooks/factory.md")));
+
+  const linkedRepo = join(root, "linked");
+  const outside = join(root, "outside");
+  initRepo(linkedRepo, `${NS}/linked`);
+  mkdirSync(outside);
+  symlinkSync(outside, join(linkedRepo, ".claude"), "dir");
+  assert.throws(() => wireTarget(linkedRepo, resolve("."), () => {}), /refusing to wire a symbolic link/, "a symlinked destination is refused");
+  assert.equal(existsSync(join(outside, "settings.json")), false, "and nothing is written through it");
 
   console.log("local checkout regressions passed");
 } finally {

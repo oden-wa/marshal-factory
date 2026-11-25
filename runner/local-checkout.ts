@@ -32,7 +32,7 @@ async function cloneRepo(repo: string, path: string) {
   );
   chmodSync(askpass, 0o700);
   try {
-    await localHost.run("git", ["clone", "--quiet", `https://github.com/${repo}.git`, path], {
+    await localHost.run("git", ["-c", "credential.helper=", "clone", "--quiet", `https://github.com/${repo}.git`, path], {
       timeoutMs: CLONE_TIMEOUT_MS,
       env: { GIT_ASKPASS: askpass, GIT_TERMINAL_PROMPT: "0", MARSHAL_FACTORY_GITHUB_TOKEN: token },
     });
@@ -104,14 +104,17 @@ function rememberCheckout(path: string) {
 
 export async function prepareRepoCheckout(repo: string) {
   const machine = await localCheckoutRuntime.machine();
-  const marked = await updateLocalCheckout(repo, (current, now) => ({
-    state: "preparing",
-    requestedAt: current?.requestedAt ?? now,
-    updatedAt: now,
-    ...(current?.machine && { machine: current.machine }),
-    ...(current?.path && { path: current.path }),
-  }));
-  if (!marked) return { repo, skipped: "not registered" };
+  const marked = await updateLocalCheckout(repo, (current, now) => {
+    if (current?.state === "ready") return null;
+    return {
+      state: "preparing",
+      requestedAt: current?.requestedAt ?? now,
+      updatedAt: now,
+      machine: machine.name,
+      ...(current?.path && { path: current.path }),
+    };
+  });
+  if (!marked) return { repo, skipped: "no pending checkout" };
 
   try {
     const picked = await checkoutPath(repo);

@@ -8,7 +8,6 @@ import { eq } from "drizzle-orm";
 import { db } from "../db/client";
 import { machines } from "../db/schema";
 import { loadConfig } from "../lib/config";
-import { config } from "./config";
 import { UNKNOWN, type Heartbeat, type Inventory } from "../lib/machine";
 import { sandboxReadiness } from "../lib/sandbox";
 import { connectStatus, readHarnesses, readProjects, readT3Runtime } from "../lib/t3-state";
@@ -110,7 +109,7 @@ export function parseOrigin(url: string) {
 }
 
 export function inventoryCollectors(): InventoryCollectors {
-  const { factory } = config;
+  const { factory } = loadConfig();
   return {
     runnerSha: async () => (await text("git", ["rev-parse", "HEAD"], RUNNER_DIR)).trim(),
     t3: async () => readT3Runtime(),

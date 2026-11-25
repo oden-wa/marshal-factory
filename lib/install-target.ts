@@ -1,4 +1,4 @@
-import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { CONFIG_PATH } from "./config";
 import { json, withHooks, withServer, type Json } from "./target-wiring";
@@ -37,15 +37,25 @@ export function addRepoToFactoryConfig(repo: string, { configPath = CONFIG_PATH,
 
 export function wireTarget(target: string, root: string, log: InstallLog = console.log) {
   const repo = resolve(target);
+  const targetPath = (relative: string) => {
+    let path = repo;
+    for (const part of relative.split("/")) {
+      path = join(path, part);
+      if (lstatSync(path, { throwIfNoEntry: false })?.isSymbolicLink()) throw new Error(`refusing to wire a symbolic link: ${path}`);
+    }
+    return path;
+  };
   const factoryRoot = root.replace(/\/$/, "");
-  const settingsPath = join(repo, ".claude/settings.json");
+  const settingsPath = targetPath(".claude/settings.json");
+  const mcpPath = targetPath(".mcp.json");
+  const playbookPath = targetPath(".agents/playbooks/factory.md");
+  const eslintConfigs = ["eslint.config.mjs", "eslint.config.js", "eslint.config.ts"].map(targetPath);
   write(settingsPath, json(withHooks(readJson(settingsPath), factoryRoot)), log);
-  const mcpPath = join(repo, ".mcp.json");
   write(mcpPath, json(withServer(readJson(mcpPath), factoryRoot)), log);
-  write(join(repo, ".agents/playbooks/factory.md"), readFileSync(join(factoryRoot, "playbooks/factory.md"), "utf8"), log);
+  write(playbookPath, readFileSync(join(factoryRoot, "playbooks/factory.md"), "utf8"), log);
 
   // Claude Code puts isolated subagents in .claude/worktrees/; linting them breaks the repo's lint.
-  const eslintConfig = ["eslint.config.mjs", "eslint.config.js", "eslint.config.ts"].map((name) => join(repo, name)).find(existsSync);
+  const eslintConfig = eslintConfigs.find(existsSync);
   if (eslintConfig) {
     const text = readFileSync(eslintConfig, "utf8");
     if (text.includes(".claude/")) log(`unchanged ${eslintConfig}`);
