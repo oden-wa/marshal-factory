@@ -104,3 +104,13 @@ test("Bun upgrades replace old local reporters and flag stale shared reporters",
   assert.throws(() => reportingHooks({}, "/factory", "/new/bin/bun", old), /Conflicting/);
   assert.equal(reportingHooks({}, "/factory", "/old/bin/bun-canary", old).SessionStart?.length, 0);
 });
+
+test("a custom checker that inspects the reporter survives migration", () => {
+  const hook = {type: "command", command: '"/opt/check-integrity" "/factory/hooks/report.ts"'};
+  const old = {hooks: {SessionStart: [{hooks: [hook]}]}};
+  assert.deepEqual(reportingHooks(old, "/factory", "/bin/bun").SessionStart?.[0]?.hooks, [hook]);
+  const legacy = {hooks: {SessionStart: [{hooks: [{...hook, command: '"/home/$USER/.bun/bin/bun" "/factory/hooks/report.ts"'}]}]}};
+  assert.throws(() => reportingHooks({}, "/factory", "/bin/bun", legacy), /Conflicting/);
+  const top = reportingHooks({}, "/", "/bin/bun");
+  assert.deepEqual(reportingHooks({hooks: top}, "/", "/bin/bun"), top);
+});

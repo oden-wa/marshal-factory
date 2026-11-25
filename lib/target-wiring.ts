@@ -47,12 +47,15 @@ export function reportingHooks(settings: Json, factoryRoot: string, bun: string,
     const prefix = reporterPrefix(checkout);
     const wrapped = script === "report.ts" && command.startsWith(prefix);
     if (wrapped) command = command.slice(prefix.length);
-    const path = `${checkout}/hooks/${script}`;
+    const path = `${checkout.endsWith("/") ? checkout : checkout + "/"}hooks/${script}`;
     for (const arg of new Set([shellPath(path), '"' + path + '"'])) {
       if (!command.endsWith(" " + arg)) continue;
       const executable = command.slice(0, -arg.length - 1);
-      if (/^"\/(?:\\["\\$`]|[^"\\$`])*"$/.test(executable)) return true;
-      if (executable === "bun" || /^'\/[^']*'$/.test(executable) || executable === shellPath(bun)) return true;
+      // The wrapper identifies our command even when Bun was installed under a custom name.
+      if (wrapped && /^"\/(?:\\["\\$`]|[^"\\$`])*"$/.test(executable)) return true;
+      if (executable === "bun" || executable === shellPath(bun) ||
+          /^"\/[^"]*\/bun(?:-canary|-debug)?"$/.test(executable) ||
+          /^'\/[^']*\/bun(?:-canary|-debug)?'$/.test(executable)) return true;
     }
     return false;
   }
