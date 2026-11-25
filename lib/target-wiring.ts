@@ -11,8 +11,8 @@ type HookEntry = {
 };
 
 /** Ours, per event, in order. PostToolUse takes every tool so the reporter can send usage snapshots. */
-function hooksFor(root: string): Record<string, HookEntry[]> {
-  const reporter = { type: "command", command: `bun "${join(root, "hooks/report.ts")}"`, async: true, timeout: 20 };
+function hooksFor(root: string, bun: string): Record<string, HookEntry[]> {
+  const reporter = { type: "command", command: `${bun} "${join(root, "hooks/report.ts")}"`, async: true, timeout: 20 };
   return {
     SessionStart: [{ hooks: [reporter] }],
     PreToolUse: [{ matcher: "Agent", hooks: [reporter] }],
@@ -26,9 +26,9 @@ function hooksFor(root: string): Record<string, HookEntry[]> {
 /** hooks/budget.ts counts as ours so rewiring a repo from before the cap was removed drops it. */
 const isOurs = (entry: HookEntry) => entry.hooks?.some((hook) => /hooks\/(report|budget)\.ts/.test(hook.command ?? ""));
 
-export function withHooks(settings: Json, root: string): Json {
+export function withHooks(settings: Json, root: string, bun = "bun"): Json {
   const hooks = { ...((settings.hooks as Record<string, HookEntry[]>) ?? {}) };
-  for (const [event, ours] of Object.entries(hooksFor(root))) {
+  for (const [event, ours] of Object.entries(hooksFor(root, bun))) {
     hooks[event] = [...(hooks[event] ?? []).filter((entry) => !isOurs(entry)), ...ours];
   }
   const permissions = (settings.permissions as Json) ?? {};
