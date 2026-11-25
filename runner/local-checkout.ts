@@ -46,16 +46,21 @@ async function addRepoDurable(path: string) {
   if (added === "missing") throw new Error(`${CONFIG_PATH} does not exist, so the checkout would not survive a runner restart`);
 }
 
-const outputOf = (error: unknown) => {
-  const failure = error as { message?: string; stdout?: string; stderr?: string };
-  return [failure.message, failure.stdout, failure.stderr].filter(Boolean).join("\n");
-};
+async function hasT3Project(path: string) {
+  try {
+    await localHost.run(localHost.t3, ["thread", "list", "--project", path, "--json"], { timeoutMs: 5_000 });
+    return true;
+  } catch {
+    return false;
+  }
+}
 
-async function ensureT3Project(path: string) {
+export async function ensureT3Project(path: string) {
+  if (await hasT3Project(path)) return;
   try {
     await localHost.run(localHost.t3, ["project", "add", path, "--title", basename(path)], { timeoutMs: 30_000 });
   } catch (error) {
-    if (!/ProjectAlreadyExistsError|project already exists/i.test(outputOf(error))) throw error;
+    if (!(await hasT3Project(path))) throw error;
   }
 }
 
@@ -141,8 +146,8 @@ export async function prepareRepoCheckout(repo: string) {
     const origin = await localCheckoutRuntime.origin(path);
     if (!sameRepo(origin, repo)) throw new Error(`${path} is a checkout of ${origin}, not ${repo}`);
     await localCheckoutRuntime.wire(path);
-    await localCheckoutRuntime.addRepo(path);
     await localCheckoutRuntime.ensureProject(path);
+    await localCheckoutRuntime.addRepo(path);
     rememberCheckout(path);
     await updateLocalCheckout(repo, (current, now) =>
       current

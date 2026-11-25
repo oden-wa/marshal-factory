@@ -9,7 +9,8 @@ import { eq } from "drizzle-orm";
 const { db } = await import("../db/client");
 const { repoSettings } = await import("../db/schema");
 const { config } = await import("../runner/config");
-const { localCheckoutRuntime, prepareRepoCheckout } = await import("../runner/local-checkout");
+const { localCheckoutRuntime, ensureT3Project, prepareRepoCheckout } = await import("../runner/local-checkout");
+const { localHost } = await import("../lib/host");
 const { addRepoToFactoryConfig, wireTarget } = await import("../lib/install-target");
 const { parseDetail } = await import("../lib/onboarding");
 
@@ -146,6 +147,55 @@ try {
   symlinkSync(outside, join(linkedRepo, ".claude"), "dir");
   assert.throws(() => wireTarget(linkedRepo, resolve("."), () => {}), /refusing to wire a symbolic link/, "a symlinked destination is refused");
   assert.equal(existsSync(join(outside, "settings.json")), false, "and nothing is written through it");
+
+
+  const originalRun = localHost.run;
+  const t3Calls: string[] = [];
+  try {
+    localHost.run = async (_command, args) => {
+      const call = args.join(" ");
+      t3Calls.push(call);
+      if (call.startsWith("thread list")) throw new Error("No T3 Code project matches");
+      if (call.startsWith("project add")) return { stdout: "", stderr: "" };
+      throw new Error(`unexpected t3 call: ${call}`);
+    };
+    await ensureT3Project("/tmp/project-new");
+    assert.deepEqual(t3Calls, ["thread list --project /tmp/project-new --json", "project add /tmp/project-new --title project-new"]);
+
+    t3Calls.length = 0;
+    localHost.run = async (_command, args) => {
+      const call = args.join(" ");
+      t3Calls.push(call);
+      return { stdout: "[]", stderr: "" };
+    };
+    await ensureT3Project("/tmp/project-present");
+    assert.deepEqual(t3Calls, ["thread list --project /tmp/project-present --json"], "an existing T3 project is reused");
+
+    t3Calls.length = 0;
+    let probes = 0;
+    localHost.run = async (_command, args) => {
+      const call = args.join(" ");
+      t3Calls.push(call);
+      if (call.startsWith("thread list")) {
+        probes += 1;
+        if (probes === 1) throw new Error("No T3 Code project matches");
+        return { stdout: "[]", stderr: "" };
+      }
+      if (call.startsWith("project add")) throw new Error("ProjectAlreadyExistsError: An active project already exists");
+      throw new Error(`unexpected t3 call: ${call}`);
+    };
+    await ensureT3Project("/tmp/project-race");
+    assert.deepEqual(t3Calls.filter((call) => call.startsWith("project add")).length, 1, "a registration race is confirmed by probing T3");
+
+    localHost.run = async (_command, args) => {
+      const call = args.join(" ");
+      if (call.startsWith("project add")) throw new Error("permission denied");
+      throw new Error("No T3 Code project matches");
+    };
+    await assert.rejects(ensureT3Project("/tmp/project-failure"), /permission denied/, "an unconfirmed registration failure is not swallowed");
+  } finally {
+    localHost.run = originalRun;
+  }
 
   console.log("local checkout regressions passed");
 } finally {
