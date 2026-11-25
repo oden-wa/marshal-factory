@@ -15,6 +15,7 @@ import {
   saveRepoSecrets as saveSecrets,
   writeNewRepository,
   writeRepoRequest,
+  type AddRepositoryInput,
   type SecretsInput,
 } from "@/lib/repo-onboarding";
 import {
@@ -53,8 +54,17 @@ export async function addableRepositories() {
   return listAddable({ user, registry, installable });
 }
 
-export async function addRepository(input: { repo: string }) {
-  return add({ user, registry, installable, create: (repo, by) => writeNewRepository(db, repo, by, new Date()), syncLabels: (groups) => panelSource().panelSyncLabelGroups!(groups) }, input);
+export async function addRepository(input: AddRepositoryInput) {
+  return add(
+    {
+      user,
+      registry,
+      installable,
+      create: (repo, by, setup) => writeNewRepository(db, repo, by, new Date(), setup),
+      syncLabels: (groups) => panelSource().panelSyncLabelGroups!(groups),
+    },
+    input,
+  );
 }
 
 export async function saveRepositorySecrets(input: SecretsInput) {

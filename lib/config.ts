@@ -79,6 +79,8 @@ export const factorySchema = z
     subagentIdleHours: z.number().nonnegative().default(6),
     /** Target repos the factory works in; the installer adds each one. */
     repos: z.array(z.string()).default([]),
+    /** Where a local-first registration clones a repo when this machine has no checkout of it yet. */
+    checkoutRoot: z.string().default(join(homedir(), "targets")).transform(home),
     /** The provider and model for new factory threads when the panel's settings hold none. */
     provider: z.string().default(DEFAULT_PROVIDER),
     model: z.string().default(DEFAULT_MODEL),

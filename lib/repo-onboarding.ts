@@ -24,7 +24,12 @@ const FORBIDDEN = { ok: false, status: 403, message: "Only the factory owner can
 const invalid = (message: string) => ({ ok: false, status: 400, message }) as const;
 const failed = (what: string, error: unknown) => ({ ok: false, status: 502, message: `Could not ${what}: ${error instanceof Error ? error.message : String(error)}` }) as const;
 
+export const REPO_SETUPS = ["cloud", "local"] as const;
+export type RepoSetup = (typeof REPO_SETUPS)[number];
+
 const repoInput = z.object({ repo: z.string().regex(REPO_NAME, "Name the repo as owner/name.") });
+export const addRepositoryInputSchema = repoInput.extend({ setup: z.enum(REPO_SETUPS).default("cloud") });
+export type AddRepositoryInput = z.input<typeof addRepositoryInputSchema>;
 
 export type AddableOutcome = { ok: true; repos: Installable["repos"]; manageUrl: string } | { ok: false; status: number; message: string };
 
@@ -32,8 +37,8 @@ export type AddRepositoryDeps = {
   user: () => Promise<SessionUser | null | undefined>;
   registry: () => Promise<Registry>;
   installable: () => Promise<Installable>;
-  /** The registry row and its onboard_repo intent, in one transaction. */
-  create: (repo: string, by: string) => Promise<void>;
+  /** The registry row and its first runner intent, in one transaction. */
+  create: (repo: string, by: string, setup: RepoSetup) => Promise<void>;
   syncLabels: (groups: readonly LabelGroupSpec[]) => Promise<{ created: string[]; problems: string[] }>;
 };
 
@@ -53,15 +58,16 @@ export async function listAddable(deps: Pick<AddRepositoryDeps, "user" | "regist
 export type AddOutcome = { ok: true; labelNote?: string } | { ok: false; status: number; message: string };
 
 /**
- * Registers a repo the App reaches, enabled and not the default, and asks a runner to onboard it.
+ * Registers a repo the App reaches, enabled and not the default. Cloud setup asks a runner to onboard
+ * it; local-first setup asks a runner to clone and wire a checkout, with cloud onboarding left for later.
  * Its Repository label child is added too; a label that cannot be added only notes why.
  */
 export async function addRepository(deps: AddRepositoryDeps, input: unknown): Promise<AddOutcome> {
   const user = await deps.user();
   if (!user || !isOwner(user)) return FORBIDDEN;
-  const parsed = repoInput.safeParse(input);
+  const parsed = addRepositoryInputSchema.safeParse(input);
   if (!parsed.success) return invalid(parsed.error.issues[0]?.message ?? "The repository is not valid.");
-  const { repo } = parsed.data;
+  const { repo, setup } = parsed.data;
   const registry = await deps.registry();
   if (registry.some((r) => r.repo.toLowerCase() === repo.toLowerCase())) return invalid(`${repo} is already registered.`);
   if (registry.some((r) => (r.display_name ?? repoName(r.repo)).toLowerCase() === repoName(repo).toLowerCase())) {
@@ -75,7 +81,7 @@ export async function addRepository(deps: AddRepositoryDeps, input: unknown): Pr
   }
   if (!installable.repos.some((r) => r.repo.toLowerCase() === repo.toLowerCase())) return invalid(`The GitHub App cannot reach ${repo}. Grant it access first.`);
   try {
-    await deps.create(repo, user.email);
+    await deps.create(repo, user.email, setup);
   } catch (error) {
     return failed("add the repository", error);
   }
@@ -89,20 +95,23 @@ export async function addRepository(deps: AddRepositoryDeps, input: unknown): Pr
 
 const intentRow = (kind: IntentKind, repo: string, at: Date) => ({ id: `panel:${kind}:${repo}:${randomUUID()}`, kind, detail: repo, created_at: at });
 
-export async function writeNewRepository(database: Db, repo: string, by: string, at: Date) {
+export async function writeNewRepository(database: Db, repo: string, by: string, at: Date, setup: RepoSetup = "cloud") {
+  const local = setup === "local";
+  const requestedAt = at.toISOString();
   await database.transaction(async (tx) => {
     await tx.insert(repoSettings).values({
       repo,
       enabled: true,
       is_default: false,
-      onboarding_state: "analyzing",
-      onboarding_detail: {},
-      onboarding_started_at: at,
-      onboarding_at: at,
+      execution: local ? "local" : null,
+      onboarding_state: local ? null : "analyzing",
+      onboarding_detail: local ? { localCheckout: { state: "preparing", requestedAt, updatedAt: requestedAt } } : {},
+      onboarding_started_at: local ? null : at,
+      onboarding_at: local ? null : at,
       updated_at: at,
       updated_by: by,
     });
-    await tx.insert(intents).values(intentRow("onboard_repo", repo, at));
+    await tx.insert(intents).values(intentRow(local ? "prepare_repo_checkout" : "onboard_repo", repo, at));
   });
 }
 

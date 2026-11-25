@@ -226,7 +226,7 @@ try {
     user: async () => user,
     registry: async () => db.select().from(repoSettings),
     installable: async () => installable,
-    create: (repo: string, by: string) => actions.writeNewRepository(db, repo, by, new Date()),
+    create: (repo: string, by: string, setup: "cloud" | "local") => actions.writeNewRepository(db, repo, by, new Date(), setup),
     syncLabels: async (groups: unknown) => (labels.push(groups), { created: [], problems: [] }),
   });
   for (const user of [null, { email: "x@example.com", emailVerified: true }]) {
@@ -244,6 +244,15 @@ try {
   const freshIntents = await db.select().from(intents).where(eq(intents.detail, `${NS}/fresh`));
   assert.deepEqual(freshIntents.map((i) => i.kind), ["onboard_repo"], "a runner is asked to onboard it");
   assert.deepEqual(labels, [[{ group: "Repository", children: ["fresh"] }]], "its Repository label child is added");
+
+  installable.repos.push({ repo: `${NS}/local`, private: true, description: null });
+  assert.deepEqual(await actions.addRepository(addDeps(), { repo: `${NS}/local`, setup: "local" }), { ok: true });
+  const local = await row(`${NS}/local`);
+  assert.deepEqual([local.enabled, local.execution, local.onboarding_state, local.onboarding_started_at], [true, "local", null, null], "local-first skips cloud onboarding and runs locally");
+  assert.equal(onboarding.parseDetail(local.onboarding_detail).localCheckout?.state, "preparing");
+  const localIntents = await db.select().from(intents).where(eq(intents.detail, `${NS}/local`));
+  assert.deepEqual(localIntents.map((i) => i.kind), ["prepare_repo_checkout"], "a runner is asked to prepare its checkout");
+  assert.deepEqual(labels.at(-1), [{ group: "Repository", children: ["local"] }], "a local-first repo gets its label too");
 
   // A committed recipe skips the agent: the build validates it and its checks run.
   committed[COMMITTED] = JSON.stringify(valid);

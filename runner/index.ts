@@ -33,6 +33,7 @@ const { watchMerges } = await import("./post-merge");
 const { syncOverrideLabels } = await import("./overrides");
 const { baseImageIdle, rebuildBaseImage, stopBaseImage } = await import("./base-image");
 const { advanceOnboarding, onboardRepo, repoPushed, requestRebuild } = await import("./onboarding");
+const { prepareRepoCheckout } = await import("./local-checkout");
 const { repoPushDetailSchema } = await import("../lib/webhooks");
 const { notifySlack, sendSlackTest, slackFromEnv } = await import("./slack");
 const { keepSubscribed } = await import("./realtime");
@@ -106,6 +107,11 @@ async function handle(intent: IntentRow) {
       return { onboarding: await onboardRepo(intent.detail!) };
     case "rebuild_repo_image":
       return { rebuild: await requestRebuild(intent.detail!, "the owner asked for a rebuild") };
+    case "prepare_repo_checkout": {
+      const checkout = await prepareRepoCheckout(intent.detail!);
+      await beat({ fresh: true });
+      return { checkout };
+    }
     case "repo_push":
       return { push: await repoPushed(repoPushDetailSchema.parse(JSON.parse(intent.detail ?? "null"))) };
     case "retry_stop":

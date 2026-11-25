@@ -23,6 +23,7 @@ export const INTENT_ROUTES = {
   close_job: "owner",
   onboard_repo: "any",
   rebuild_repo_image: "any",
+  prepare_repo_checkout: "any",
   repo_push: "any",
   retry_stop: "owner",
   retry_job: "any",
@@ -48,6 +49,7 @@ export const INTENT_ATTEMPTS = {
   // Each try may start an onboarding sandbox; a repo that keeps failing shows why on its row.
   onboard_repo: 10,
   rebuild_repo_image: 10,
+  prepare_repo_checkout: 10,
   repo_push: 20,
   // The owner sees the error on the inbox item and can retry again.
   retry_stop: 3,

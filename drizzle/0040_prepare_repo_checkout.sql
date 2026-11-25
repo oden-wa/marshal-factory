@@ -1,0 +1,1 @@
+ALTER TYPE "public"."intent_kind" ADD VALUE 'prepare_repo_checkout' BEFORE 'repo_push';

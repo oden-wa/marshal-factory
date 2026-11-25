@@ -9,12 +9,13 @@ import { Button } from "@/components/ui/button";
 import { Dialog, DialogDescription, DialogFooter, DialogHeader, DialogPanel, DialogPopup, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Field, FieldDescription, FieldLabel } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
+import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Spinner } from "@/components/ui/spinner";
 import type { RepoSettingsRow } from "@/db/schema";
 import { componentName, IMAGE_COMPONENTS } from "@/lib/machine";
 import { parseDetail, STATE_LABELS, stateLine, type OnboardingState } from "@/lib/onboarding";
 import { CHECKS, RECIPE_PATH } from "@/lib/recipe";
-import type { AddableOutcome } from "@/lib/repo-onboarding";
+import type { AddableOutcome, RepoSetup } from "@/lib/repo-onboarding";
 import { cn } from "@/lib/utils";
 import { ShortTime } from "./time";
 
@@ -26,6 +27,9 @@ const BADGE: Record<OnboardingState, "info" | "warning" | "success" | "error"> =
   rebuilding: "info",
   failed: "error",
 };
+
+const CHECKOUT_BADGE = { preparing: "info", ready: "success", failed: "error" } as const;
+const CHECKOUT_LABEL = { preparing: "Preparing", ready: "Ready", failed: "Failed" } as const;
 
 /** States a runner is working through; the page refreshes itself while any repo is in one. */
 const MOVING: readonly OnboardingState[] = ["analyzing", "building", "rebuilding"];
@@ -42,7 +46,7 @@ export function OnboardingBadge({ state }: { state: OnboardingState }) {
 
 export function useOnboardingRefresh(registry: readonly RepoSettingsRow[]) {
   const router = useRouter();
-  const moving = registry.some((r) => r.onboarding_state && MOVING.includes(r.onboarding_state));
+  const moving = registry.some((r) => (r.onboarding_state && MOVING.includes(r.onboarding_state)) || parseDetail(r.onboarding_detail).localCheckout?.state === "preparing");
   useEffect(() => {
     if (!moving) return;
     const id = setInterval(() => router.refresh(), REFRESH_MS);
@@ -54,6 +58,11 @@ export const onboardingLine = (row: RepoSettingsRow) => (row.onboarding_state ? 
 
 type Addable = Extract<AddableOutcome, { ok: true }>;
 
+const SETUP_ITEMS = [
+  { value: "local", label: "Local checkout first" },
+  { value: "cloud", label: "Cloud sandbox onboarding" },
+] as const;
+
 /** Lists the repos the GitHub App reaches that are not registered, and adds the one picked. */
 export function AddRepository() {
   const router = useRouter();
@@ -62,6 +71,7 @@ export function AddRepository() {
   const [failure, setFailure] = useState<string | null>(null);
   const [note, setNote] = useState<string | null>(null);
   const [filter, setFilter] = useState("");
+  const [setup, setSetup] = useState<RepoSetup>("local");
   const [pending, startTransition] = useTransition();
   const [adding, setAdding] = useState<string | null>(null);
 
@@ -78,7 +88,7 @@ export function AddRepository() {
     setFailure(null);
     setAdding(repo);
     startTransition(async () => {
-      const outcome = await addRepository({ repo });
+      const outcome = await addRepository({ repo, setup });
       setAdding(null);
       if (!outcome.ok) {
         setFailure(outcome.message);
@@ -113,8 +123,8 @@ export function AddRepository() {
         <DialogHeader>
           <DialogTitle>Add repository</DialogTitle>
           <DialogDescription>
-            Pick a repository the factory&apos;s GitHub App can reach. An agent then writes its setup recipe as a pull request, and the factory builds a
-            warm sandbox image from it so jobs start fast.
+            Pick a repository the factory&apos;s GitHub App can reach. Local-first prepares a runner checkout and sets the repo to run locally; cloud
+            onboarding writes its setup recipe and builds a warm sandbox image.
           </DialogDescription>
         </DialogHeader>
         <DialogPanel className="flex flex-col gap-3">
@@ -122,6 +132,26 @@ export function AddRepository() {
             <p className="text-sm text-warning">{note}</p>
           ) : (
             <>
+              <Field>
+                <FieldLabel htmlFor="repository-setup">Initial setup</FieldLabel>
+                <Select items={SETUP_ITEMS} value={setup} onValueChange={(value) => value !== null && setSetup(value as RepoSetup)} disabled={pending}>
+                  <SelectTrigger id="repository-setup" className="w-full">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectPopup>
+                    {SETUP_ITEMS.map((item) => (
+                      <SelectItem key={item.value} value={item.value}>
+                        {item.label}
+                      </SelectItem>
+                    ))}
+                  </SelectPopup>
+                </Select>
+                <FieldDescription>
+                  {setup === "local"
+                    ? "Clone and wire the repo on a runner, then run it locally. Cloud onboarding stays available later."
+                    : "Analyze the repo in a cloud sandbox and build its warm image now."}
+                </FieldDescription>
+              </Field>
               <Input value={filter} onChange={(e) => setFilter(e.target.value)} placeholder="Filter repositories" aria-label="Filter repositories" autoFocus />
               <div className="max-h-80 min-h-24 overflow-y-auto rounded-md border">
                 {!addable && !failure && (
@@ -257,6 +287,7 @@ export function OnboardingSection({ row, panelTakesSecrets }: { row: RepoSetting
   const [failure, setFailure] = useState<string | null>(null);
   const [pending, startTransition] = useTransition();
   const state = row.onboarding_state;
+  const checkout = detail.localCheckout;
   const act = (action: (input: { repo: string }) => Promise<{ ok: true } | { ok: false; message: string }>) => {
     setFailure(null);
     startTransition(async () => {
@@ -269,6 +300,9 @@ export function OnboardingSection({ row, panelTakesSecrets }: { row: RepoSetting
   const checks = recipe ? CHECKS.filter((name) => recipe.checks[name]) : [];
   const result = (name: string) => detail.checks?.find((c) => c.name === name);
   const versions = detail.image?.base.versions;
+  const notOnboarded = checkout
+    ? "Cloud onboarding has not started. Use the local checkout first, then start onboarding when the cloud sandbox is ready."
+    : "Registered before onboarding. Its cloud sandbox jobs start from the base image and set themselves up.";
 
   return (
     <div className="flex flex-col gap-4 px-4.5 py-4">
@@ -277,8 +311,28 @@ export function OnboardingSection({ row, panelTakesSecrets }: { row: RepoSetting
         {state ? <OnboardingBadge state={state} /> : <Badge variant="outline" size="sm">Not onboarded</Badge>}
       </div>
       <p className={cn("text-sm", state === "failed" || state === "needs_input" ? "text-warning" : "text-muted-foreground")}>
-        {state ? stateLine(state, detail) : "Registered before onboarding. Its cloud sandbox jobs start from the base image and set themselves up."}
+        {state ? stateLine(state, detail) : notOnboarded}
       </p>
+      {checkout && (
+        <div className="flex flex-col gap-1 rounded-md border px-3 py-2 text-sm">
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="font-medium">Local checkout</span>
+            <Badge variant={CHECKOUT_BADGE[checkout.state]} size="sm">
+              {checkout.state === "preparing" && <Spinner className="size-2.5" />}
+              {CHECKOUT_LABEL[checkout.state]}
+            </Badge>
+          </div>
+          <p className={cn(checkout.state === "failed" ? "text-warning" : "text-muted-foreground")}>
+            {checkout.state === "preparing" && "A runner is cloning and wiring the repository."}
+            {checkout.state === "ready" && (
+              <>
+                Ready on {checkout.machine ?? "a runner"} at <span className="font-mono text-xs">{checkout.path}</span>
+              </>
+            )}
+            {checkout.state === "failed" && (checkout.failure?.reason ?? "The checkout could not be prepared.")}
+          </p>
+        </div>
+      )}
       {detail.failure?.log && <pre className="max-h-48 overflow-auto rounded-md bg-muted p-2 font-mono text-xs whitespace-pre-wrap">{detail.failure.log}</pre>}
       {detail.summary && <p className="text-sm">{detail.summary}</p>}
       {recipe && (

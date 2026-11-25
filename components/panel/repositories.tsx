@@ -20,7 +20,7 @@ import { EXECUTIONS, type Execution } from "@/lib/execution";
 import type { Harness } from "@/lib/harness";
 import { parseInventory, rebuildText, reportedDrift, reportedHarnesses, reportedSandbox, sandboxLogin, UNKNOWN } from "@/lib/machine";
 import { AUTONOMY_LABELS, AUTONOMY_LEVELS, type Autonomy } from "@/lib/merge-decision";
-import { repoImage } from "@/lib/onboarding";
+import { parseDetail, repoImage, type LocalCheckout } from "@/lib/onboarding";
 import { displayName } from "@/lib/repo-name";
 import type { RepoStats } from "@/lib/repositories";
 import { RUNS_ON_LABELS } from "@/lib/ticket-overrides";
@@ -55,7 +55,7 @@ const githubUrl = (repo: string) => `https://github.com/${repo}`;
  * repo, its warm image, or the base image while the warm one is outdated; a local launch needs a
  * runner's checkout.
  */
-export type Places = { modal: boolean; modalNote: string | null; machines: string[]; rebuild?: string };
+export type Places = { modal: boolean; modalNote: string | null; machines: string[]; checkout?: LocalCheckout; rebuild?: string };
 
 function placesOf(rows: readonly MachineRow[], now: number, row: RepoSettingsRow): Places {
   const sandbox = reportedSandbox(rows, now);
@@ -78,19 +78,37 @@ function placesOf(rows: readonly MachineRow[], now: number, row: RepoSettingsRow
       }
     }
   })();
-  return { modal: runner && image.kind !== "blocked", modalNote, machines, ...(drift.length > 0 && { rebuild: rebuildText(drift) }) };
+  return {
+    modal: runner && image.kind !== "blocked",
+    modalNote,
+    machines,
+    checkout: parseDetail(row.onboarding_detail).localCheckout,
+    ...(drift.length > 0 && { rebuild: rebuildText(drift) }),
+  };
 }
 
-function placesLine({ modal, modalNote, machines, rebuild }: Places) {
-  const parts = [modal && modalNote, rebuild, machines.length > 0 && `Local checkout on ${machines.join(", ")}`].filter(Boolean);
+function placesLine({ modal, modalNote, machines, checkout, rebuild }: Places) {
+  const local =
+    machines.length > 0
+      ? `Local checkout on ${machines.join(", ")}`
+      : checkout?.state === "ready"
+        ? `Local checkout ready on ${checkout.machine ?? "a runner"}`
+        : checkout?.state === "preparing"
+          ? "Preparing a local checkout"
+          : checkout?.state === "failed"
+            ? "Local checkout preparation failed"
+            : null;
+  const parts = [modal && modalNote, rebuild, local].filter(Boolean);
   return parts.length > 0 ? parts.join(" · ") : "Neither a cloud sandbox image nor a local checkout";
 }
 
 type Entry = { row: RepoSettingsRow; stats: RepoStats | undefined; places: Places };
 
+const unavailable = (places: Places) => !places.modal && places.machines.length === 0 && places.checkout?.state !== "ready" && places.checkout?.state !== "preparing";
+
 function Row({ entry, open, cursor, onFocus }: { entry: Entry; open: boolean; cursor: boolean; onFocus: () => void }) {
   const { row, stats, places } = entry;
-  const nowhere = !places.modal && places.machines.length === 0;
+  const nowhere = unavailable(places);
   return (
     <div
       className={cn(
@@ -228,7 +246,7 @@ function Detail({ entry, harnesses, panelTakesSecrets }: { entry: Entry; harness
               <ExternalLinkIcon data-icon="inline-end" />
             </Button>
           </div>
-          <p className={cn("text-sm", !places.modal && places.machines.length === 0 ? "text-warning" : "text-muted-foreground")}>{placesLine(places)}</p>
+          <p className={cn("text-sm", unavailable(places) ? "text-warning" : "text-muted-foreground")}>{placesLine(places)}</p>
         </div>
         <Separator />
         <OnboardingSection key={`${row.onboarding_state}-${row.onboarding_at?.toISOString()}`} row={row} panelTakesSecrets={panelTakesSecrets} />
