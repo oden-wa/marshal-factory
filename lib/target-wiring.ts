@@ -1,5 +1,5 @@
 import { realpathSync } from "node:fs";
-import { join } from "node:path";
+import { isAbsolute, join } from "node:path";
 import { REPORT_SERVER, REPORT_STAGE_TOOL } from "./factory";
 
 // How a target repo reaches a factory checkout: Claude Code hooks, the factory-report MCP server.
@@ -37,6 +37,7 @@ function hooksFor(root: string, bun: string): Record<string, HookEntry[]> {
 }
 
 export function reportingHooks(settings: Json, root: string, bun: string, shared: Json = {}) {
+  if (!isAbsolute(root)) throw new Error("Factory checkout must be an absolute path");
   const hooks = { ...((settings.hooks as Record<string, HookEntry[]>) ?? {}) };
   if ((settings.disableAllHooks ?? shared.disableAllHooks) === true) throw new Error("Claude reporting disabled by disableAllHooks");
   // Earlier installers quoted the absolute Bun binary with either kind of quote.
@@ -53,8 +54,11 @@ export function reportingHooks(settings: Json, root: string, bun: string, shared
     return false;
   }
   const matcher = (value?: string) => value === "*" || value === ".*" ? "" : value ?? "";
-  for (const [event, ours] of Object.entries(hooksFor(root, bun))) {
-    const installed = (shared.hooks as Record<string, HookEntry[]> | undefined)?.[event] ?? [];
+  const desired = hooksFor(root, bun);
+  const sharedHooks = (shared.hooks as Record<string, HookEntry[]> | undefined) ?? {};
+  for (const event of new Set([...Object.keys(desired), ...Object.keys(sharedHooks), ...Object.keys(hooks)])) {
+    const ours = desired[event] ?? [];
+    const installed = sharedHooks[event] ?? [];
 
     let inherited = false;
     for (const entry of installed) {
@@ -72,7 +76,7 @@ export function reportingHooks(settings: Json, root: string, bun: string, shared
         if (generated(hook.command, "budget.ts", trusted)) throw new Error(`Remove the retired shared budget hook for ${event}`);
         const safe = hook.command === reporterCommand(trusted, bun) || hook.command === reporterCommand(trusted, "bun");
         if (!generated(hook.command, "report.ts", trusted)) continue;
-        if (!safe || matcher(entry.matcher) !== matcher(ours[0]?.matcher) ||
+        if (!ours.length || trusted !== root || !safe || matcher(entry.matcher) !== matcher(ours[0]?.matcher) ||
             inherited) {
           throw new Error(`Conflicting shared reporter for ${event}`);
         }
@@ -83,7 +87,7 @@ export function reportingHooks(settings: Json, root: string, bun: string, shared
       const other = entry.hooks.filter((hook) => hook.type !== "command" || (!generated(hook.command, "report.ts") && !generated(hook.command, "budget.ts")));
       return other.length ? [{ ...entry, hooks: other }] : [];
     });
-    hooks[event] = inherited ? local : [...local, ...ours];
+    if (ours.length || hooks[event]) hooks[event] = inherited ? local : [...local, ...ours];
   }
   return hooks;
 }

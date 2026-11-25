@@ -74,17 +74,18 @@ test("legacy local commands are replaced and equivalent shared matchers are inhe
   assert.throws(() => reportingHooks({}, root, "/new/bin/bun", outdated), /Conflicting/);
 });
 
-test("shared reporter aliases are inherited, disabled hooks and retired budget hooks are reported", () => {
+test("mutable shared reporter aliases are rejected, disabled hooks and retired budget hooks are reported", () => {
   const dir = mkdtempSync(join(tmpdir(), "marshal-reporter-alias-"));
   try {
     const root = join(import.meta.dirname, "..");
     const alias = join(dir, "factory");
     symlinkSync(root, alias);
     const shared = withHooks({}, alias);
-    assert.equal(reportingHooks({}, root, process.execPath, shared).SessionStart?.length, 0);
+    assert.throws(() => reportingHooks({}, root, process.execPath, shared), /Conflicting/);
+    assert.throws(() => reportingHooks({}, "relative/factory", process.execPath), /absolute path/);
     assert.throws(() => reportingHooks({}, root, process.execPath, {disableAllHooks: true}), /disableAllHooks/);
     assert.doesNotThrow(() => reportingHooks({disableAllHooks: false}, root, process.execPath, {disableAllHooks: true}));
-    const budget = {hooks: {PreToolUse: [{hooks: [{type: "command", command: `bun "${alias}/hooks/budget.ts"`}]}]}};
+    const budget = {hooks: {UserPromptSubmit: [{hooks: [{type: "command", command: `bun "${alias}/hooks/budget.ts"`}]}]}};
     assert.throws(() => reportingHooks({}, root, process.execPath, budget), /retired shared budget/);
   } finally {
     rmSync(dir, {recursive: true, force: true});
