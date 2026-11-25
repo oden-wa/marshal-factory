@@ -36,7 +36,8 @@ function hooksFor(root: string, bun: string): Record<string, HookEntry[]> {
   };
 }
 
-export function reportingHooks(settings: Json, root: string, bun: string, shared: Json = {}) {
+export function reportingHooks(settings: Json, factoryRoot: string, bun: string, shared: Json = {}) {
+  const root = join(factoryRoot, ".");
   if (!isAbsolute(root)) throw new Error("Factory checkout must be an absolute path");
   const hooks = { ...((settings.hooks as Record<string, HookEntry[]>) ?? {}) };
   if ((settings.disableAllHooks ?? shared.disableAllHooks) === true) throw new Error("Claude reporting disabled by disableAllHooks");

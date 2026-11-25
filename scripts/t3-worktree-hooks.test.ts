@@ -81,6 +81,7 @@ test("mutable shared reporter aliases are rejected, disabled hooks and retired b
     const alias = join(dir, "factory");
     symlinkSync(root, alias);
     const shared = withHooks({}, alias);
+    assert.equal(reportingHooks({}, root + "/", process.execPath, withHooks({}, root)).SessionStart?.length, 0);
     assert.throws(() => reportingHooks({}, root, process.execPath, shared), /Conflicting/);
     assert.throws(() => reportingHooks({}, "relative/factory", process.execPath), /absolute path/);
     assert.throws(() => reportingHooks({}, root, process.execPath, {disableAllHooks: true}), /disableAllHooks/);
