@@ -9,7 +9,8 @@ import { json, reportingHooks } from "../lib/target-wiring";
 const project = process.env.T3CODE_PROJECT_ROOT;
 const tree = process.env.T3CODE_WORKTREE_PATH;
 if (!project || !tree) throw new Error("T3 project and worktree paths are required");
-if (loadLimits().repos.some((repo) => resolve(repo) === resolve(project))) {
+const projectRoot = realpathSync(project);
+if (loadLimits().repos.some((repo) => existsSync(repo) && realpathSync(repo) === projectRoot)) {
   const git = (...args: string[]) => execFileSync("git", ["-C", tree, ...args], { encoding: "utf8" }).trim();
   if (parseBranch(git("branch", "--show-current"))) {
     if (realpathSync(tree) !== realpathSync(git("rev-parse", "--show-toplevel")) || realpathSync(tree) === realpathSync(project)) {

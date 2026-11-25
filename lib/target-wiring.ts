@@ -29,18 +29,26 @@ function hooksFor(root: string, bun: string): Record<string, HookEntry[]> {
 
 export function reportingHooks(settings: Json, root: string, bun: string, shared: Json = {}) {
   const hooks = { ...((settings.hooks as Record<string, HookEntry[]>) ?? {}) };
-  const managed = new Set<string>();
-  for (const script of ["report.ts", "budget.ts"]) {
-    for (const executable of ["bun", shellPath(bun)]) managed.add(`${executable} ${shellPath(join(root, "hooks", script))}`);
+  // Earlier installers quoted the absolute Bun binary with either kind of quote.
+  // Match the complete invocation and exact reporter path, including legacy path quoting.
+  function generated(command: string, script: string) {
+    const path = join(root, "hooks", script);
+    for (const arg of new Set([shellPath(path), '"' + path + '"'])) {
+      if (!command.endsWith(" " + arg)) continue;
+      const executable = command.slice(0, -arg.length - 1);
+      if (executable === "bun" || /^"\/[^"]*\/bun"$/.test(executable) || /^'\/[^']*\/bun'$/.test(executable) || executable === shellPath(bun)) return true;
+    }
+    return false;
   }
+  const matcher = (value?: string) => value === "*" || value === ".*" ? "" : value ?? "";
   for (const [event, ours] of Object.entries(hooksFor(root, bun))) {
     const installed = (shared.hooks as Record<string, HookEntry[]> | undefined)?.[event] ?? [];
     const legacy = `bun ${shellPath(join(root, "hooks/report.ts"))}`;
     let inherited = false;
     for (const entry of installed) {
       for (const hook of entry.hooks ?? []) {
-        if (hook.type !== "command" || (hook.command !== legacy && hook.command !== ours[0]?.hooks[0]?.command)) continue;
-        if ((entry.matcher ?? "") !== (ours[0]?.matcher ?? "") ||
+        if (hook.type !== "command" || !generated(hook.command, "report.ts")) continue;
+        if ((hook.command !== legacy && hook.command !== ours[0]?.hooks[0]?.command) || matcher(entry.matcher) !== matcher(ours[0]?.matcher) ||
             inherited) {
           throw new Error(`Conflicting shared reporter for ${event}`);
         }
@@ -48,7 +56,7 @@ export function reportingHooks(settings: Json, root: string, bun: string, shared
       }
     }
     const local = (hooks[event] ?? []).flatMap((entry) => {
-      const other = entry.hooks.filter((hook) => hook.type !== "command" || !managed.has(hook.command));
+      const other = entry.hooks.filter((hook) => hook.type !== "command" || (!generated(hook.command, "report.ts") && !generated(hook.command, "budget.ts")));
       return other.length ? [{ ...entry, hooks: other }] : [];
     });
     hooks[event] = inherited ? local : [...local, ...ours];

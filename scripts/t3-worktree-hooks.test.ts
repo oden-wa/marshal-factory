@@ -1,10 +1,10 @@
 import { test } from "bun:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { withHooks } from "../lib/target-wiring";
+import { reportingHooks, withHooks } from "../lib/target-wiring";
 
 test("T3 installs only missing hooks in an ignored settings file in its own worktree", () => {
   const dir = mkdtempSync(join(tmpdir(), "marshal-t3-hooks-"));
@@ -16,8 +16,11 @@ test("T3 installs only missing hooks in an ignored settings file in its own work
     git("-C", project, "-c", "user.name=test", "-c", "user.email=test@example.org", "commit", "--allow-empty", "-qm", "fixture");
     git("-C", project, "worktree", "add", "-qb", "factory/FAC-1", tree);
     const config = join(dir, "config.json");
-    writeFileSync(config, JSON.stringify({factory: {repos: [project]}}));
-    const setup = (path: string) => execFileSync(process.execPath, [join(import.meta.dirname, "t3-worktree-hooks.ts")], {
+    symlinkSync(project, join(dir, "alias"));
+    writeFileSync(config, JSON.stringify({factory: {repos: [join(dir, "alias")]}}));
+    writeFileSync(join(tree, "bunfig.toml"), "[invalid");
+    const setup = (path: string) => execFileSync(join(import.meta.dirname, "t3-worktree-hooks.sh"), [process.execPath], {
+      cwd: path,
       env: {...process.env, MARSHAL_FACTORY_CONFIG: config, T3CODE_PROJECT_ROOT: project, T3CODE_WORKTREE_PATH: path}, stdio: "pipe",
     });
     const foreign = join(dir, "foreign");
@@ -43,4 +46,20 @@ test("T3 installs only missing hooks in an ignored settings file in its own work
   } finally {
     rmSync(dir, {recursive: true, force: true});
   }
+});
+
+test("legacy local commands are replaced and equivalent shared matchers are inherited", () => {
+  const root = "/factory $archive";
+  const hook = (command: string) => ({type: "command", command});
+  const local = {hooks: {PostToolUse: [{hooks: [
+    hook(`'/old/bin/bun' "${root}/hooks/report.ts"`), hook("node ./hooks/report.ts"),
+  ]}]}};
+  const command = 'bun "/factory \\$archive/hooks/report.ts"';
+  for (const matcher of ["*", ".*"]) {
+    const shared = {hooks: {PostToolUse: [{matcher, hooks: [hook(command)]}]}};
+    const hooks = reportingHooks(local, root, "/new/bin/bun", shared);
+    assert.deepEqual(hooks.PostToolUse, [{hooks: [hook("node ./hooks/report.ts")]}]);
+  }
+  const outdated = {hooks: {PostToolUse: [{hooks: [hook(`bun "${root}/hooks/report.ts"`)]}]}};
+  assert.throws(() => reportingHooks({}, root, "/new/bin/bun", outdated), /Conflicting/);
 });
