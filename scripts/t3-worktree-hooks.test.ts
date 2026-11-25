@@ -83,7 +83,9 @@ test("mutable shared reporter aliases are rejected, disabled hooks and retired b
     const shared = withHooks({}, alias);
     assert.equal(reportingHooks({}, root + "/", process.execPath, withHooks({}, root)).SessionStart?.length, 0);
     assert.throws(() => reportingHooks({}, root, process.execPath, shared), /Conflicting/);
-    const oldLocal = {hooks: {SessionStart: [{hooks: [{type: "command", command: `bun "${alias}/hooks/report.ts"`}]}]}};
+    const legacy = {type: "command", command: `"/old/bin/bun-canary" "${alias}/./hooks/report.ts"`};
+    const oldLocal = {hooks: {SessionStart: [{hooks: [legacy]}]}};
+    assert.throws(() => reportingHooks({}, root, process.execPath, oldLocal), /Conflicting/);
     assert.deepEqual(reportingHooks(oldLocal, root, process.execPath), reportingHooks({}, root, process.execPath));
     assert.throws(() => reportingHooks({}, "relative/factory", process.execPath), /absolute path/);
     assert.throws(() => reportingHooks({}, root, process.execPath, {disableAllHooks: true}), /disableAllHooks/);

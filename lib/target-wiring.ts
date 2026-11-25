@@ -47,12 +47,12 @@ export function reportingHooks(settings: Json, factoryRoot: string, bun: string,
     const prefix = reporterPrefix(checkout);
     const wrapped = script === "report.ts" && command.startsWith(prefix);
     if (wrapped) command = command.slice(prefix.length);
-    const path = join(checkout, "hooks", script);
+    const path = `${checkout}/hooks/${script}`;
     for (const arg of new Set([shellPath(path), '"' + path + '"'])) {
       if (!command.endsWith(" " + arg)) continue;
       const executable = command.slice(0, -arg.length - 1);
-      if (wrapped && /^"\/(?:\\["\\$`]|[^"\\$`])*"$/.test(executable)) return true;
-      if (executable === "bun" || /^"\/[^"]*\/bun"$/.test(executable) || /^'\/[^']*\/bun'$/.test(executable) || executable === shellPath(bun)) return true;
+      if (/^"\/(?:\\["\\$`]|[^"\\$`])*"$/.test(executable)) return true;
+      if (executable === "bun" || /^'\/[^']*'$/.test(executable) || executable === shellPath(bun)) return true;
     }
     return false;
   }
