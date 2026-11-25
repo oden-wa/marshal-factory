@@ -11,8 +11,12 @@ type HookEntry = {
 };
 
 /** Ours, per event, in order. PostToolUse takes every tool so the reporter can send usage snapshots. */
-function hooksFor(root: string): Record<string, HookEntry[]> {
-  const reporter = { type: "command", command: `bun "${join(root, "hooks/report.ts")}"`, async: true, timeout: 20 };
+function shellPath(path: string) {
+  return '"' + path.replace(/["\\$`]/g, "\\$&") + '"';
+}
+
+function hooksFor(root: string, bun: string): Record<string, HookEntry[]> {
+  const reporter = { type: "command", command: `${bun === "bun" ? bun : shellPath(bun)} ${shellPath(join(root, "hooks/report.ts"))}`, async: true, timeout: 20 };
   return {
     SessionStart: [{ hooks: [reporter] }],
     PreToolUse: [{ matcher: "Agent", hooks: [reporter] }],
@@ -23,14 +27,45 @@ function hooksFor(root: string): Record<string, HookEntry[]> {
   };
 }
 
-/** hooks/budget.ts counts as ours so rewiring a repo from before the cap was removed drops it. */
-const isOurs = (entry: HookEntry) => entry.hooks?.some((hook) => /hooks\/(report|budget)\.ts/.test(hook.command ?? ""));
+export function reportingHooks(settings: Json, root: string, bun: string, shared: Json = {}) {
+  const hooks = { ...((settings.hooks as Record<string, HookEntry[]>) ?? {}) };
+  // Earlier installers quoted the absolute Bun binary with either kind of quote.
+  // Match the complete invocation and exact reporter path, including legacy path quoting.
+  function generated(command: string, script: string) {
+    const path = join(root, "hooks", script);
+    for (const arg of new Set([shellPath(path), '"' + path + '"'])) {
+      if (!command.endsWith(" " + arg)) continue;
+      const executable = command.slice(0, -arg.length - 1);
+      if (executable === "bun" || /^"\/[^"]*\/bun"$/.test(executable) || /^'\/[^']*\/bun'$/.test(executable) || executable === shellPath(bun)) return true;
+    }
+    return false;
+  }
+  const matcher = (value?: string) => value === "*" || value === ".*" ? "" : value ?? "";
+  for (const [event, ours] of Object.entries(hooksFor(root, bun))) {
+    const installed = (shared.hooks as Record<string, HookEntry[]> | undefined)?.[event] ?? [];
+    const legacy = `bun ${shellPath(join(root, "hooks/report.ts"))}`;
+    let inherited = false;
+    for (const entry of installed) {
+      for (const hook of entry.hooks ?? []) {
+        if (hook.type !== "command" || !generated(hook.command, "report.ts")) continue;
+        if ((hook.command !== legacy && hook.command !== ours[0]?.hooks[0]?.command) || matcher(entry.matcher) !== matcher(ours[0]?.matcher) ||
+            inherited) {
+          throw new Error(`Conflicting shared reporter for ${event}`);
+        }
+        inherited = true;
+      }
+    }
+    const local = (hooks[event] ?? []).flatMap((entry) => {
+      const other = entry.hooks.filter((hook) => hook.type !== "command" || (!generated(hook.command, "report.ts") && !generated(hook.command, "budget.ts")));
+      return other.length ? [{ ...entry, hooks: other }] : [];
+    });
+    hooks[event] = inherited ? local : [...local, ...ours];
+  }
+  return hooks;
+}
 
 export function withHooks(settings: Json, root: string): Json {
-  const hooks = { ...((settings.hooks as Record<string, HookEntry[]>) ?? {}) };
-  for (const [event, ours] of Object.entries(hooksFor(root))) {
-    hooks[event] = [...(hooks[event] ?? []).filter((entry) => !isOurs(entry)), ...ours];
-  }
+  const hooks = reportingHooks(settings, root, "bun");
   const permissions = (settings.permissions as Json) ?? {};
   const allow = new Set([...((permissions.allow as string[]) ?? []), REPORT_STAGE_TOOL]);
   const enabled = new Set([...((settings.enabledMcpjsonServers as string[]) ?? []), REPORT_SERVER]);

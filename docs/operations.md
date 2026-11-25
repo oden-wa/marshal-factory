@@ -312,3 +312,22 @@ Each script starts with `import "./test-guard"`, which exits before any write un
 ## Research
 
 Background reports from the initial investigation live in [`docs/research/`](research/).
+
+### Local Claude sessions in T3 worktrees
+
+Configure a synchronous T3 project setup action for factory checkouts. Set
+`runOnWorktreeCreate` to `true`, `async` to `false`, and the command to
+`/absolute/path/to/marshal-factory/scripts/t3-worktree-hooks.sh /absolute/path/to/bun`.
+When the project already has a setup action, prepend this command with
+`&&` to its current command. T3 runs only the first setup action.
+
+The script uses T3's project and worktree paths and the runner's
+`factory.repos` registry. On a factory job branch it merges the reporter
+into the worktree's private Claude settings before the first turn. Git's
+local exclude file keeps those settings out of job commits. The factory
+checkout and Bun binary must stay at the configured paths.
+
+When the setup script is staged in a separate checkout, pass the active
+factory checkout after the Bun path. Shared hooks must use that reporter
+and the Claude process must have Bun on PATH. The setup action grants no MCP
+permissions.
