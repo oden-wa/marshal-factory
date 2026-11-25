@@ -63,7 +63,7 @@ async function sumTranscriptUsage(path: string | undefined, settle = true): Prom
 
 async function sh(command: string, args: string[]) {
   const { stdout } = await run(command, args, { timeout: SUBPROCESS_TIMEOUT_MS });
-  return stdout.trim();
+  return stdout.replace(/\n$/, "");
 }
 
 async function gitContext(cwd: string) {
@@ -131,7 +131,7 @@ async function usageSnapshot(
   input: HookInput,
   base: { eventId: string; sessionId: string; at: number; transcriptPath?: string },
 ): Promise<FactoryEvent | undefined> {
-  const git = await gitContext(str(input.cwd) ?? process.cwd());
+  const git = await gitContext(str(input.cwd) ?? process.env.FACTORY_HOOK_CWD ?? process.cwd());
   const onFactoryBranch = Boolean(parseBranch(git.branch));
   if (onFactoryBranch) rememberSessionBranch(base.sessionId, git.branch!);
   if (!onFactoryBranch && !sessionBranch(base.sessionId)) return undefined;
@@ -154,7 +154,7 @@ async function toEvent(
 ): Promise<FactoryEvent[] | FactoryEvent | undefined> {
   switch (input.hook_event_name) {
     case "SessionStart": {
-      const cwd = str(input.cwd) ?? process.cwd();
+      const cwd = str(input.cwd) ?? process.env.FACTORY_HOOK_CWD ?? process.cwd();
       const git = await gitContext(cwd);
       if (parseBranch(git.branch)) rememberSessionBranch(base.sessionId, git.branch!);
       const t3 = await findT3Thread(cwd, git);
@@ -189,7 +189,7 @@ async function toEvent(
         const report = stageReportSchema.safeParse(input.tool_input);
         // The MCP tool refused a report whose screenshots it couldn't read, so it reports nothing either.
         if (!report.success || unreadable(report.data.assessment?.screenshots ?? []).length > 0) return undefined;
-        const git = await gitContext(str(input.cwd) ?? process.cwd());
+        const git = await gitContext(str(input.cwd) ?? process.env.FACTORY_HOOK_CWD ?? process.cwd());
         const jobKey = parseBranch(git.branch)?.key;
         const stage: FactoryEvent = { ...base, kind: "stage", ...report.data, jobKey, branch: git.branch };
         const refs = report.data.assessment?.screenshots ?? [];

@@ -1,3 +1,4 @@
+import { realpathSync } from "node:fs";
 import { join } from "node:path";
 import { REPORT_SERVER, REPORT_STAGE_TOOL } from "./factory";
 
@@ -15,8 +16,12 @@ function shellPath(path: string) {
   return '"' + path.replace(/["\\$`]/g, "\\$&") + '"';
 }
 
+function reporterCommand(root: string, bun: string) {
+  return `export FACTORY_HOOK_CWD="$PWD" && cd ${shellPath(root)} && exec ${bun === "bun" ? bun : shellPath(bun)} ${shellPath(join(root, "hooks/report.ts"))}`;
+}
+
 function hooksFor(root: string, bun: string): Record<string, HookEntry[]> {
-  const reporter = { type: "command", command: `${bun === "bun" ? bun : shellPath(bun)} ${shellPath(join(root, "hooks/report.ts"))}`, async: true, timeout: 20 };
+  const reporter = { type: "command", command: reporterCommand(root, bun), async: true, timeout: 20 };
   return {
     SessionStart: [{ hooks: [reporter] }],
     PreToolUse: [{ matcher: "Agent", hooks: [reporter] }],
@@ -29,10 +34,12 @@ function hooksFor(root: string, bun: string): Record<string, HookEntry[]> {
 
 export function reportingHooks(settings: Json, root: string, bun: string, shared: Json = {}) {
   const hooks = { ...((settings.hooks as Record<string, HookEntry[]>) ?? {}) };
+  if ((settings.disableAllHooks ?? shared.disableAllHooks) === true) throw new Error("Claude reporting disabled by disableAllHooks");
   // Earlier installers quoted the absolute Bun binary with either kind of quote.
   // Match the complete invocation and exact reporter path, including legacy path quoting.
-  function generated(command: string, script: string) {
-    const path = join(root, "hooks", script);
+  function generated(command: string, script: string, checkout = root) {
+    if (script === "report.ts" && (command === reporterCommand(checkout, bun) || command === reporterCommand(checkout, "bun"))) return true;
+    const path = join(checkout, "hooks", script);
     for (const arg of new Set([shellPath(path), '"' + path + '"'])) {
       if (!command.endsWith(" " + arg)) continue;
       const executable = command.slice(0, -arg.length - 1);
@@ -43,12 +50,24 @@ export function reportingHooks(settings: Json, root: string, bun: string, shared
   const matcher = (value?: string) => value === "*" || value === ".*" ? "" : value ?? "";
   for (const [event, ours] of Object.entries(hooksFor(root, bun))) {
     const installed = (shared.hooks as Record<string, HookEntry[]> | undefined)?.[event] ?? [];
-    const legacy = `bun ${shellPath(join(root, "hooks/report.ts"))}`;
+
     let inherited = false;
     for (const entry of installed) {
       for (const hook of entry.hooks ?? []) {
-        if (hook.type !== "command" || !generated(hook.command, "report.ts")) continue;
-        if ((hook.command !== legacy && hook.command !== ours[0]?.hooks[0]?.command) || matcher(entry.matcher) !== matcher(ours[0]?.matcher) ||
+        if (hook.type !== "command") continue;
+        // A shared configuration can name the same installation through a symlink.
+        const argument = /"((?:\\.|[^"\\])+)\/hooks\/(report|budget)\.ts"$/.exec(hook.command);
+        const alias = argument?.[1]?.replace(/\\(["\\$`])/g, "$1");
+        let trusted = root;
+        if (alias && alias !== root && alias.startsWith("/")) {
+          try {
+            if (realpathSync(alias) === realpathSync(root)) trusted = alias;
+          } catch { /* An unrelated checkout may not exist on this host. */ }
+        }
+        if (generated(hook.command, "budget.ts", trusted)) throw new Error(`Remove the retired shared budget hook for ${event}`);
+        const safe = hook.command === reporterCommand(trusted, bun) || hook.command === reporterCommand(trusted, "bun");
+        if (!generated(hook.command, "report.ts", trusted)) continue;
+        if (!safe || matcher(entry.matcher) !== matcher(ours[0]?.matcher) ||
             inherited) {
           throw new Error(`Conflicting shared reporter for ${event}`);
         }

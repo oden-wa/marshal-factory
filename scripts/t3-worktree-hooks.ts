@@ -11,13 +11,13 @@ const tree = process.env.T3CODE_WORKTREE_PATH;
 if (!project || !tree) throw new Error("T3 project and worktree paths are required");
 const projectRoot = realpathSync(project);
 if (loadLimits().repos.some((repo) => existsSync(repo) && realpathSync(repo) === projectRoot)) {
-  const git = (...args: string[]) => execFileSync("git", ["-C", tree, ...args], { encoding: "utf8" }).trim();
+  const git = (...args: string[]) => execFileSync("git", ["-C", tree, ...args], { encoding: "utf8" }).replace(/\n$/, "");
   if (parseBranch(git("branch", "--show-current"))) {
     if (realpathSync(tree) !== realpathSync(git("rev-parse", "--show-toplevel")) || realpathSync(tree) === realpathSync(project)) {
       throw new Error("Expected a separate T3 worktree");
     }
     const commonDir = ["rev-parse", "--path-format=absolute", "--git-common-dir"];
-    const projectGit = execFileSync("git", ["-C", project, ...commonDir], { encoding: "utf8" }).trim();
+    const projectGit = execFileSync("git", ["-C", project, ...commonDir], { encoding: "utf8" }).replace(/\n$/, "");
     if (realpathSync(projectGit) !== realpathSync(git(...commonDir))) throw new Error("Worktree belongs to another repository");
     const local = ".claude/settings.local.json";
     const path = join(tree, local);

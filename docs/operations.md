@@ -331,3 +331,9 @@ When the setup script is staged in a separate checkout, pass the active
 factory checkout after the Bun path. Shared hooks must use that reporter
 and the Claude process must have Bun on PATH. The setup action grants no MCP
 permissions.
+
+Update checked-in Claude reporter commands before rolling out the new setup
+action. Each reporter starts Bun from the factory checkout and passes the
+original job directory in `FACTORY_HOOK_CWD` as a fallback for events without
+a `cwd`. A shared reporter that still starts Bun directly must be migrated
+in the target repository, since adding a local hook would leave both active.
