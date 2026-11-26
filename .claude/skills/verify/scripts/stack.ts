@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
 import { execFileSync, spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { chmodSync, existsSync, mkdirSync, openSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { Client } from "pg";
 import { REPO, STATE_FILE, STATE_DIR, VERIFY_HOME, isOurs, readState, servesPort, startTime, withLock, type StackState } from "./paths";
@@ -23,7 +23,12 @@ function projectId(): string {
 const neon = (project: string, ...args: string[]) => sh("neon", [...args, "--project-id", project]);
 
 // Holds the branch connection strings and the cookie secret.
-const save = (state: StackState) => writeFileSync(STATE_FILE, JSON.stringify(state, null, 2), { mode: 0o600 });
+const save = (state: StackState) => {
+  // Written aside and renamed, so a crash mid-write never loses the branch id `down` needs.
+  const draft = `${STATE_FILE}.${process.pid}`;
+  writeFileSync(draft, JSON.stringify(state, null, 2), { mode: 0o600 });
+  renameSync(draft, STATE_FILE);
+};
 
 async function httpStatus(url: string): Promise<number | null> {
   try {
@@ -109,7 +114,7 @@ async function up() {
     });
     if (!signUp.ok) throw new Error(`owner sign-up failed: ${signUp.status} ${await signUp.text()}`);
   } finally {
-    neon(project, "neon-auth", "config", "email-password", "update", "--branch", branchId, "--disable-sign-up", "true");
+    neon(project, "neon-auth", "config", "email-password", "update", "--branch", branchId, "--disable-sign-up", "true", "--require-email-verification", "true");
   }
   // isOwner (lib/auth/owner.ts) also requires a verified address; no mail is sent, so mark it here.
   const client = new Client({ connectionString: direct.replace("sslmode=require", "sslmode=verify-full") });

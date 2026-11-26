@@ -1,6 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, openSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, linkSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
@@ -70,20 +70,23 @@ const processGroup = (pid: number): number | null => {
   }
 };
 
-/** Serializes `up` and `down` in one checkout; a lock left by a dead holder is taken over. */
+/** Serializes `up` and `down` in one checkout. The lock is linked in whole, so no reader ever sees it half written. */
 export async function withLock<T>(run: () => Promise<T> | T): Promise<T> {
   mkdirSync(STATE_DIR, { recursive: true, mode: 0o700 });
   const lock = join(STATE_DIR, "lock");
-  for (let attempt = 0; ; attempt++) {
-    try {
-      writeFileSync(openSync(lock, "wx", 0o600), `${process.pid} ${startTime(process.pid)}`);
-      break;
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "EEXIST" || attempt > 0) throw error;
-      const [pid, start] = readFileSync(lock, "utf8").split(" ");
-      if (startTime(Number(pid)) === start) throw new Error(`another stack.ts (pid ${pid}) is running in this checkout`);
-      rmSync(lock, { force: true });
-    }
+  const draft = `${lock}.${process.pid}`;
+  writeFileSync(draft, `${process.pid} ${startTime(process.pid)}`, { mode: 0o600 });
+  try {
+    linkSync(draft, lock);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+    const [pid, start] = readFileSync(lock, "utf8").split(" ");
+    // Taking a dead holder's lock over cannot be made atomic here, so that is left to the user.
+    throw new Error(startTime(Number(pid)) === start
+      ? `another stack.ts (pid ${pid}) is running in this checkout`
+      : `${lock} is left by a stack.ts that died (pid ${pid}); check the state with doctor, then remove the lock`);
+  } finally {
+    rmSync(draft, { force: true });
   }
   try {
     return await run();
