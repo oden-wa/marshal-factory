@@ -208,20 +208,6 @@ function down() {
   console.log(`evidence kept under ${join(VERIFY_HOME, "evidence")}`);
 }
 
-function printEnv() {
-  const state = readState();
-  if (!state) throw new Error("no stack: run `stack.ts up`");
-  // An empty or foreign env would leave the caller's own DATABASE_URL, possibly production, in effect.
-  for (const key of ["DATABASE_URL", "DATABASE_URL_UNPOOLED"]) {
-    if (!onEndpoint(state.env[key], state.endpointId)) throw new Error(`stack has no ${key} on ${state.endpointId}: run \`stack.ts down\` and \`up\` again`);
-  }
-  for (const [key, value] of Object.entries(state.env)) {
-    if (key === "PATH" || key === "HOME") continue;
-    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) throw new Error(`not a shell variable name: ${key}`);
-    console.log(`export ${key}='${value.replaceAll("'", `'\\''`)}'`);
-  }
-}
-
 const KNOWN_PARAMS = new Set(["sslmode", "channel_binding"]);
 
 /** A Neon Postgres URL whose host is the branch endpoint (direct or pooled), with no parameter that could redirect it. */
@@ -276,9 +262,8 @@ const command = process.argv[2];
 if (command === "up") await withLock(up);
 else if (command === "doctor") await doctor();
 else if (command === "down") await withLock(down);
-else if (command === "env") printEnv();
 else if (command === "sql") await sql(process.argv[3]);
 else {
-  console.error("usage: stack.ts up | doctor | env | sql <query> | down");
+  console.error("usage: stack.ts up | doctor | sql <query> | down");
   process.exit(2);
 }

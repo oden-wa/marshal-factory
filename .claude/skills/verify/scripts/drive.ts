@@ -2,11 +2,10 @@
 import { execFileSync } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import type { Locator, Page } from "playwright-core";
+import type { Locator } from "playwright-core";
 import { VERIFY_HOME, isOurs, readState, servesPort } from "./paths";
 
 const TOOLS = join(VERIFY_HOME, "tools");
-const LOOPBACK = new Set(["localhost", "127.0.0.1", "[::1]"]);
 const PLAYWRIGHT_CORE = "playwright-core@1.52.0";
 
 async function loadPlaywright() {
@@ -31,29 +30,20 @@ function fileName(name: string): string {
   return name;
 }
 
-// Cookies are not port-scoped, so a request to another localhost port, redirect hops included, would carry the session.
-// Playwright's route() never sees redirect hops; the CDP Fetch domain pauses every one.
-export async function keepSessionOnPanel(page: Page, baseUrl: string) {
-  const port = new URL(baseUrl).port;
-  const cdp = await page.context().newCDPSession(page);
-  cdp.on("Fetch.requestPaused", ({ requestId, request }) => {
-    const url = new URL(request.url);
-    const allowed = !LOOPBACK.has(url.hostname) || url.port === port;
-    void cdp.send(allowed ? "Fetch.continueRequest" : "Fetch.failRequest", allowed ? { requestId } : { requestId, errorReason: "BlockedByClient" }).catch(() => {});
-  });
-  await cdp.send("Fetch.enable", { patterns: [{ urlPattern: "*", requestStage: "Request" }] });
-}
-
 export async function openPanel(journey: string, viewport = { width: 1440, height: 900 }) {
   const state = readState();
   if (!state) throw new Error("no stack: run `stack.ts up`");
   // Another checkout's panel may hold the port now; never hand it this branch's owner password.
   if (!isOurs(state)) throw new Error("the stack's next dev is not running: run `stack.ts down` and `up` again");
   const { chromium } = await loadPlaywright();
-  const browser = await chromium.launch({ executablePath: chromePath(), headless: true });
+  // Cookies are not port-scoped by default, so a redirect or a new tab to another localhost port would carry the session.
+  const browser = await chromium.launch({
+    executablePath: chromePath(),
+    headless: true,
+    args: ["--enable-features=EnablePortBoundCookies,EnableSchemeBoundCookies"],
+  });
   const context = await browser.newContext({ viewport, locale: "ja-JP", timezoneId: "Asia/Tokyo" });
   const page = await context.newPage();
-  await keepSessionOnPanel(page, state.baseUrl);
   const root = join(VERIFY_HOME, "evidence");
   const dir = join(root, `${new Date().toISOString().replace(/[:.]/g, "-")}-${fileName(journey)}`);
   // Captures show production data copied into the branch.
@@ -66,9 +56,9 @@ export async function openPanel(journey: string, viewport = { width: 1440, heigh
     await browser.close();
     throw new Error(`${state.baseUrl} is not served by this stack's next dev: run \`stack.ts down\` and \`up\` again`);
   }
-  await page.getByLabel("Email").fill(state.ownerEmail);
-  await page.getByLabel("Password").fill(state.ownerPassword);
-  await page.getByRole("button", { name: /sign in/i }).click();
+  await page.locator('input[type="email"]').fill(state.ownerEmail);
+  await page.locator('input[type="password"]').fill(state.ownerPassword);
+  await page.locator('form button[type="submit"]').click();
   await page.waitForURL((url) => !url.pathname.startsWith("/auth"), { timeout: 60_000 });
   if (new URL(page.url()).origin !== new URL(state.baseUrl).origin) {
     await browser.close();

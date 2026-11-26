@@ -5,7 +5,7 @@ This directory is the maintained source for verifying what the owner sees in the
 ## Baseline preconditions
 
 - `bun .claude/skills/verify/scripts/stack.ts up` has printed `ready:` for this checkout, and `stack.ts doctor` prints no `FAIL`.
-- The branch holds a copy of production rows as of `up`: jobs `FAC-1` to `FAC-5`, their runs, inbox items and settings. Look up keys and session ids on the branch (with the guarded `stack.ts env` subshell from `SKILL.md`) rather than assuming them.
+- The branch holds a copy of production rows as of `up`: jobs `FAC-1` to `FAC-5`, their runs, inbox items and settings. Look up keys and session ids on the branch (with `stack.ts sql`) rather than assuming them.
 - Never point a drive at production or at a stack another checkout started.
 
 ## Driving conventions

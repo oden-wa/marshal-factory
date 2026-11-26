@@ -49,7 +49,7 @@ await shot("after", page.getByRole("heading", { level: 2 }));
 await close();
 ```
 
-`shot` waits for every `aria-busy="true"` and `data-slot="skeleton"` loader to leave before capturing, and fails when the browser ended up on another origin or back on `/auth`. Requests to any other `localhost` port, redirect hops included, fail with `ERR_BLOCKED_BY_CLIENT`, because cookies are not port-scoped and would carry the owner's session there. After a click, pass a locator for what the new screen shows as the second argument: `networkidle` can already hold for the old screen. Handles are the visible English labels, `aria-label`s and route paths; the feature files list them per screen. The context runs with locale `ja-JP`, so dates render as an owner in Japan sees them.
+`shot` waits for every `aria-busy="true"` and `data-slot="skeleton"` loader to leave before capturing, and fails when the browser ended up on another origin or back on `/auth`. Chrome runs with port-bound cookies, so the owner's session never reaches another `localhost` port, through a redirect or a new tab alike. After a click, pass a locator for what the new screen shows as the second argument: `networkidle` can already hold for the old screen. Handles are the visible English labels, `aria-label`s and route paths; the feature files list them per screen. The context runs with locale `ja-JP`, so dates render as an owner in Japan sees them.
 
 To set up a precondition, write rows to the branch, never to production. `stack.ts sql` runs one statement on the branch and prints each row as JSON. It connects from the state file, so the password never shows in `ps`, and it fails when no stack is up rather than falling back to a `DATABASE_URL` in your shell:
 
@@ -57,11 +57,9 @@ To set up a precondition, write rows to the branch, never to production. `stack.
 bun .claude/skills/verify/scripts/stack.ts sql "update runs set question = 'テスト' where session_id = 'mcp:factory/FAC-2'"
 ```
 
-`stack.ts env` prints the branch's `DATABASE_URL` and friends as `export` lines, for a tool that reads them from the environment.
-
 ## Evidence
 
-Each `shot` writes `<label>.png` (full page), `<label>.txt` (URL, then the page's visible text) and `<label>.aria.yml` (ARIA snapshot) under `~/.cache/marshal-factory-verify/evidence/<time>-<journey>/`. For a text change, grep the `.txt` for the new string and for the old one, and look at the PNG for layout. For an action, capture before and after, and check the row it should change with `psql "$DATABASE_URL_UNPOOLED"` after `eval`ing `stack.ts env`. Drive the real route and the real buttons, never an internal setter. A string that only Slack, Linear, GitHub or T3 receives is proved by its regression suite, not here.
+Each `shot` writes `<label>.png` (full page), `<label>.txt` (URL, then the page's visible text) and `<label>.aria.yml` (ARIA snapshot) under `~/.cache/marshal-factory-verify/evidence/<time>-<journey>/`. For a text change, grep the `.txt` for the new string and for the old one, and look at the PNG for layout. For an action, capture before and after, and check the row it should change with `stack.ts sql`. Drive the real route and the real buttons, never an internal setter. A string that only Slack, Linear, GitHub or T3 receives is proved by its regression suite, not here.
 
 ## Cleanup
 
