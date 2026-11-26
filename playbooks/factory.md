@@ -18,6 +18,7 @@ No human reads this thread while it runs. The supervision panel and the pull req
 - **Clean up only what you started.** Other runs and the operator's own servers share this machine. Start a dev server on a free port, remember its PID, and stop that PID before the turn ends. Never `pkill` or `killall` by name, and never stop a process you did not start.
 - **Prove the commit you ship.** Before you report `pr`, run `factory-verify` in the worktree on the final pushed commit, with nothing uncommitted. In a sandbox it is on `PATH`; elsewhere run the command the `report_stage` reply for `verifying` names (`bun <factory root>/hooks/verify.ts`). It runs the repo's checks at `HEAD` and reports exit codes and output for that exact commit. The factory merges only a head whose checks passed there, and runs them itself when it can. Uncommitted changes make the run count for nothing. If you push again, run it again.
 - **Show the pages you change.** In a sandbox the `playwright` MCP server drives a headless Chromium that reaches only `localhost`. Before you report `verifying` done on a change to a page or screen, start the repo's dev server, open it there and look at the result. Take a viewport screenshot of each changed page or state with `browser_take_screenshot`; it saves the file under `/work/browser`. Attach them to the `pr` assessment (see Merge assessment). The owner sees what you attached, and the factory hands a PR that changes UI files over to the owner when it has no screenshots.
+- **Write for the owner in Japanese.** Write everything the owner reads in Japanese: the `summary` and `question` of every report, every field of the merge assessment (`interpretation`, `assumptions`, `notes`, `confidence.reason`, screenshot `caption`s), the PR body and the subject of the PR title, replies to review comments, and your last message in the thread. Keep commands, paths, identifiers, code, Conventional Commits types, branch names and text quoted from the issue or the code as they are. This holds when the issue, this playbook or a message from the factory is in English.
 - **Giving up means `failed`.** If you cannot finish (three fix rounds on the same failure, a broken toolchain, a dead end), call `report_stage` with `stage: "failed"` and the reason in `summary`, then end the turn.
 
 ## Triage
@@ -50,7 +51,7 @@ When the factory tells this thread that its PR conflicts with main, the board ha
 
 Every run ends one of three ways: the factory merges it, it hands it over to the owner for review, or you asked before building (`waiting`). If the issue is open enough that different readings give different features, report `waiting` before building.
 
-1. Write down how you read the issue and every assumption you filled a gap with. Issues are often underspecified; that is fine. Put the assumptions in the PR body under a heading `Assumptions I made`, one bullet each; the factory copies them to the Linear comment.
+1. Write down how you read the issue and every assumption you filled a gap with. Issues are often underspecified; that is fine. Put the assumptions in the PR body under a heading `前提にしたこと`, one bullet each; the factory copies them to the Linear comment.
 2. Run `factory-verify` on the pushed head, as in Standing rules.
 3. Recommend `merge` when you are confident you built what the issue asked for and that it works. Additive changes the issue asked for, such as new exports or new endpoints, are fine.
 4. Recommend `handover` only when you are not confident: you are unsure what the issue meant, unsure about an assumption you had to make, or you could not show the change works. Say why in one or two sentences.
@@ -68,7 +69,7 @@ When you report `pr`, pass `assessment`: `recommendation`, `interpretation`, `as
 - **Before** "`how` over the affected subsystem." call `report_stage` with `stage: "investigating"`.
 - **Before** "Delegate code-writing to a subagent using your configured feature model" call `report_stage` with `stage: "implementing"`.
 - **Before** "Verify on the matching surface." call `report_stage` with `stage: "verifying"`. Run the repo's lint, typecheck, tests and build locally before you push.
-- **In** "Use Conventional Commits in the form `type(scope): subject`." prefix the title with the issue key, as in `FAC-2 fix(search): match item names case-insensitively`.
+- **In** "Use Conventional Commits in the form `type(scope): subject`." prefix the title with the issue key, as in `FAC-2 fix(search): 品目名を大文字と小文字を区別せずに照合する`.
 - **After** "Drop a section when it has nothing to say." start the body with a line that links the issue, as in `Linear: [FAC-2](<issue url>)`.
 - **Replace** "Opening a PR does not start a babysit." with: In a factory run, opening the PR starts a `drive` babysit of that one PR right away. The factory run is the standing request to get it green.
 - **Replace** "Run `drive` and `background` under `/loop` in dynamic mode." with: Run the watcher in the foreground and rerun it until it returns a verdict. Do not use `/loop` or scheduled wakeups: once the turn ends, nothing wakes this thread.

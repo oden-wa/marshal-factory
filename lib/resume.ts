@@ -3,6 +3,7 @@ import type { NodePgDatabase } from "drizzle-orm/node-postgres";
 import type * as schema from "../db/schema";
 import { jobs } from "../db/schema";
 import type { JobId } from "./sources/shapes";
+import { OWNER_LANGUAGE } from "./owner-language";
 
 export function qaBlock(question: string, answer: string) {
   const quote = (text: string) => text.trim().replace(/^/gm, "> ");
@@ -14,7 +15,7 @@ export function resumeMessage(subject: string, question: string, answer: string,
   return [
     `The reporter answered your question on ${subject}.`,
     "",
-    `Continue the factory playbook (${playbook}) from Triage, on this same branch, treating the answer as the spec. Report every stage with the report_stage tool. If the answer is still not enough to write an acceptance check, report waiting with one more concrete question instead of guessing.`,
+    `Continue the factory playbook (${playbook}) from Triage, on this same branch, treating the answer as the spec. Report every stage with the report_stage tool. If the answer is still not enough to write an acceptance check, report waiting with one more concrete question instead of guessing. ${OWNER_LANGUAGE}`,
     "",
     qaBlock(question, answer),
   ].join("\n");

@@ -2,6 +2,7 @@ import { z } from "zod";
 import type { JobRow } from "../db/schema";
 import { MERGE_VIAS, mergeDecisionSchema, type MergeDecision } from "./merge-decision";
 import { parseStop, stopLine, stopNeedsOwner, stopView } from "./stop";
+import { OWNER_LANGUAGE } from "./owner-language";
 
 // The "Needs you" inbox: every job waiting on the owner, in one list. Pure, so the panel, its
 // nav badge, the runner and the regressions share the rules.
@@ -193,6 +194,8 @@ export function changesMessage({ prUrl, feedback, comments = [] }: { prUrl: stri
       ? ["Comments on the code:", "", ...comments.flatMap((c) => [`- ${c.path}${c.line ? `:${c.line}` : ""}`, quote(c.body).replace(/^/gm, "  "), ""])]
       : []),
     "Update the same branch and PR, then report the PR again with a fresh assessment.",
+    "",
+    OWNER_LANGUAGE,
   ].join("\n");
 }
 
