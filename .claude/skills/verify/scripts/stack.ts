@@ -41,6 +41,9 @@ async function httpStatus(url: string): Promise<number | null> {
 
 async function up() {
   if (!startTime(process.pid)) throw new Error("stack.ts needs Linux /proc to identify and stop the panel it starts");
+  // drizzle.config.ts and next dev load these (the reuse path below migrates too); in the main checkout they hold production URLs and service tokens.
+  const envFiles = [".env", ".env.local", ".env.development", ".env.development.local"].filter((file) => existsSync(join(REPO, file)));
+  if (envFiles.length) throw new Error(`${envFiles.join(", ")} in ${REPO} would point the stack at production; run from a worktree without them`);
   const existing = readState();
   if (existing && isOurs(existing)) {
     if ((await httpStatus(`${existing.baseUrl}/auth/sign-in`)) !== 200 || !servesPort(existing) || !branchExists(existing)) {
@@ -53,9 +56,6 @@ async function up() {
   }
   // Overwriting the state would orphan its branch, a copy of production data, until it expires.
   if (existing) throw new Error(`a stack from an earlier run is left (branch ${existing.branchName}); run \`stack.ts down\` first`);
-  // drizzle.config.ts and next dev load these, and in the main checkout they hold production URLs and service tokens.
-  const envFiles = [".env", ".env.local", ".env.development", ".env.development.local"].filter((file) => existsSync(join(REPO, file)));
-  if (envFiles.length) throw new Error(`${envFiles.join(", ")} in ${REPO} would point the stack at production; run from a worktree without them`);
   const port = Number(process.env.VERIFY_PORT ?? 3007);
   // Checked before the branch copies production data.
   if (!Number.isInteger(port) || port < 1024 || port > 65535) throw new Error("VERIFY_PORT must be an integer from 1024 to 65535");
@@ -237,7 +237,12 @@ function down() {
   const failures: string[] = [];
   if (isOurs(state)) {
     // Detached at launch, so the pid is a process group: this stops next dev and its workers, nothing else.
-    process.kill(-state.pid, "SIGTERM");
+    try {
+      process.kill(-state.pid, "SIGTERM");
+    } catch (error) {
+      // ESRCH: the group exited after isOurs checked it, which is the outcome this step wants.
+      if ((error as NodeJS.ErrnoException).code !== "ESRCH") failures.push(`could not signal next dev (pgid ${state.pid}): ${error}`);
+    }
     const deadline = Date.now() + 15_000;
     while (groupAlive(state.pid) && Date.now() < deadline) Bun.sleepSync(250);
     if (groupAlive(state.pid)) failures.push(`next dev (pgid ${state.pid}) did not stop`);
