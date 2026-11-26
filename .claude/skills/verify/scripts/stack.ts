@@ -93,6 +93,14 @@ async function up() {
   if (!onEndpoint(pooled, state.endpointId) || !onEndpoint(direct, state.endpointId)) {
     throw new Error(`the branch connection strings do not point at ${state.endpointId}`);
   }
+  // First write on the branch: the migration and everything after it run without production sessions, tokens or keys.
+  console.log("removing copied credentials and sessions");
+  try {
+    await scrubAuth(direct);
+  } catch (error) {
+    down();
+    throw error;
+  }
   const authBase = /Base URL:\s+(\S+)/.exec(neon(project, "neon-auth", "status", "--branch", branchId))?.[1];
   // The owner's password is sent here, so it has to be this branch's own auth service.
   if (!authBase || !onAuthEndpoint(authBase, endpointId)) throw new Error(`the branch has no Neon Auth URL on ${endpointId}: ${authBase}`);
@@ -117,8 +125,6 @@ async function up() {
   console.log("migrating the branch to this checkout's schema");
   execFileSync("bunx", ["drizzle-kit", "migrate"], { cwd: REPO, env, stdio: "inherit" });
 
-  console.log("removing copied credentials and sessions");
-  await scrubAuth(direct);
 
   console.log("creating the owner account");
   neon(project, "neon-auth", "domain", "add", baseUrl, "--branch", branchId);
@@ -136,8 +142,8 @@ async function up() {
   if (owner.rowCount !== 1) throw new Error(`the owner ${ownerEmail} has no credential account to set a password on`);
 
   const log = join(STATE_DIR, "next-dev.log");
-  // The branch is a copy of production data, so the panel listens on loopback only.
-  const child = spawn("bunx", ["next", "dev", "-H", "localhost", "-p", String(port)], {
+  // The branch is a copy of production data, so the panel listens on loopback only, on the address the proxy dials.
+  const child = spawn("bunx", ["next", "dev", "-H", "127.0.0.1", "-p", String(port)], {
     cwd: REPO,
     env,
     detached: true,

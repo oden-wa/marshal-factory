@@ -5,16 +5,21 @@ import { isOurs, processGroup, type StackState } from "./paths";
 const DENIED = "HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
 
 // The socket's far end must belong to this stack's next dev, not to whatever took the port after it died.
-function servedByStack(upstream: Socket, state: StackState): boolean {
-  if (!isOurs(state)) return false;
-  let out: string;
-  try {
-    out = execFileSync("ss", ["-tnpH", "state", "established", `( sport = :${state.port} and dport = :${upstream.localPort} )`], { encoding: "utf8" });
-  } catch {
-    return false;
+// The client sees the connection before the server has accepted it, so the row is polled for briefly.
+async function servedByStack(upstream: Socket, state: StackState): Promise<boolean> {
+  const filter = `( src 127.0.0.1:${state.port} and dst 127.0.0.1:${upstream.localPort} )`;
+  for (let tries = 0; tries < 40 && isOurs(state); tries++) {
+    let rows: string[];
+    try {
+      rows = execFileSync("ss", ["-tnpH", "state", "established", filter], { encoding: "utf8" }).split("\n").filter(Boolean);
+    } catch {
+      return false;
+    }
+    const pids = [...(rows[0] ?? "").matchAll(/pid=(\d+)/g)].map((match) => Number(match[1]));
+    if (rows.length === 1 && pids.length > 0) return pids.every((pid) => processGroup(pid) === state.pid);
+    await new Promise((resolve) => setTimeout(resolve, 50));
   }
-  const pids = [...out.matchAll(/pid=(\d+)/g)].map((match) => Number(match[1]));
-  return pids.length > 0 && pids.every((pid) => processGroup(pid) === state.pid);
+  return false;
 }
 
 // The browser's only way out: a request for this stack's panel is relayed once its socket is proven to be ours,
@@ -66,8 +71,8 @@ export async function panelOnlyProxy(state: StackState): Promise<{ port: number;
     const upstream = connect({ host: "127.0.0.1", port });
     upstream.on("error", () => client.destroy());
     client.on("close", () => upstream.destroy());
-    upstream.on("connect", () => {
-      if (!servedByStack(upstream, state)) {
+    upstream.on("connect", async () => {
+      if (!(await servedByStack(upstream, state))) {
         upstream.destroy();
         client.end(DENIED);
         return;
