@@ -4,9 +4,8 @@ import { randomBytes } from "node:crypto";
 import { chmodSync, existsSync, mkdirSync, openSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { Client } from "pg";
-import { REPO, STATE_FILE, STATE_DIR, VERIFY_HOME, isOurs, readState, startTime, type StackState } from "./paths";
+import { REPO, STATE_FILE, STATE_DIR, VERIFY_HOME, isOurs, readState, servesPort, startTime, withLock, type StackState } from "./paths";
 
-const OWNER_EMAIL = "verify-owner@example.com";
 const EXPIRES_AFTER_MS = 2 * 60 * 60 * 1000;
 
 const sh = (cmd: string, args: string[]) =>
@@ -61,8 +60,10 @@ async function up() {
   mkdirSync(STATE_DIR, { recursive: true, mode: 0o700 });
   chmodSync(STATE_DIR, 0o700);
   const ownerPassword = `verify-${randomBytes(12).toString("base64url")}`;
+  // Per stack, so it never matches an account copied from main.
+  const ownerEmail = `verify-owner-${randomBytes(6).toString("hex")}@example.com`;
   // Written before anything else can fail, so `down` can always delete the branch.
-  const state: StackState = { project, branchId, branchName: name, endpointId, baseUrl, port, pid: 0, pidStart: "", ownerEmail: OWNER_EMAIL, ownerPassword, env: {} };
+  const state: StackState = { project, branchId, branchName: name, endpointId, baseUrl, port, pid: 0, pidStart: "", ownerEmail, ownerPassword, env: {} };
   save(state);
   console.log(`created branch ${name} (${branchId}), expires in 2 h`);
 
@@ -82,7 +83,7 @@ async function up() {
     DATABASE_URL_UNPOOLED: direct,
     NEON_AUTH_BASE_URL: authBase,
     NEON_AUTH_COOKIE_SECRET: randomBytes(32).toString("base64"),
-    FACTORY_OWNER_EMAILS: OWNER_EMAIL,
+    FACTORY_OWNER_EMAILS: ownerEmail,
     // Turns Realtime off (next.config.ts); the branch has no Realtime config.
     VERCEL_ENV: "preview",
     // forbidInTest (lib/test-mode.ts) makes Linear, GitHub, T3 and Modal calls throw instead of reaching production.
@@ -96,19 +97,24 @@ async function up() {
   execFileSync("bunx", ["drizzle-kit", "migrate"], { cwd: REPO, env, stdio: "inherit" });
 
   console.log("creating the owner account");
+  neon(project, "neon-auth", "domain", "add", baseUrl, "--branch", branchId);
+  // Sign-up is open only while the owner is created; the hosted auth API is reachable from outside this machine.
   neon(project, "neon-auth", "config", "email-password", "update", "--branch", branchId,
     "--disable-sign-up", "false", "--require-email-verification", "false", "--send-verification-email-on-sign-up", "false");
-  neon(project, "neon-auth", "domain", "add", baseUrl, "--branch", branchId);
-  const signUp = await fetch(`${authBase}/sign-up/email`, {
-    method: "POST",
-    headers: { "content-type": "application/json", origin: baseUrl },
-    body: JSON.stringify({ email: OWNER_EMAIL, password: ownerPassword, name: "Verify Owner" }),
-  });
-  if (!signUp.ok) throw new Error(`owner sign-up failed: ${signUp.status} ${await signUp.text()}`);
+  try {
+    const signUp = await fetch(`${authBase}/sign-up/email`, {
+      method: "POST",
+      headers: { "content-type": "application/json", origin: baseUrl },
+      body: JSON.stringify({ email: ownerEmail, password: ownerPassword, name: "Verify Owner" }),
+    });
+    if (!signUp.ok) throw new Error(`owner sign-up failed: ${signUp.status} ${await signUp.text()}`);
+  } finally {
+    neon(project, "neon-auth", "config", "email-password", "update", "--branch", branchId, "--disable-sign-up", "true");
+  }
   // isOwner (lib/auth/owner.ts) also requires a verified address; no mail is sent, so mark it here.
   const client = new Client({ connectionString: direct.replace("sslmode=require", "sslmode=verify-full") });
   await client.connect();
-  await client.query(`update neon_auth."user" set "emailVerified" = true where email = $1`, [OWNER_EMAIL]);
+  await client.query(`update neon_auth."user" set "emailVerified" = true where email = $1`, [ownerEmail]);
   await client.end();
 
   const log = join(STATE_DIR, "next-dev.log");
@@ -128,7 +134,7 @@ async function up() {
   // Ready means the sign-in page renders, which compiles the app shell and reaches Neon Auth.
   const deadline = Date.now() + 180_000;
   while (Date.now() < deadline) {
-    if ((await httpStatus(`${baseUrl}/auth/sign-in`)) === 200) {
+    if ((await httpStatus(`${baseUrl}/auth/sign-in`)) === 200 && servesPort(state)) {
       console.log(`ready: ${baseUrl}`);
       return;
     }
@@ -143,6 +149,7 @@ async function doctor() {
   if (!state) throw new Error("no stack: run `stack.ts up`");
   const checks: [string, boolean, string][] = [];
   checks.push(["next dev process", isOurs(state), `pid ${state.pid}`]);
+  checks.push(["serves the port", servesPort(state), `${state.baseUrl} answered by pgid ${state.pid}`]);
   const signIn = await httpStatus(`${state.baseUrl}/auth/sign-in`);
   checks.push(["sign-in page", signIn === 200, `${state.baseUrl}/auth/sign-in -> ${signIn}`]);
   const root = await httpStatus(`${state.baseUrl}/`);
@@ -211,9 +218,9 @@ function onEndpoint(value: string | undefined, endpointId: string): boolean {
 }
 
 const command = process.argv[2];
-if (command === "up") await up();
+if (command === "up") await withLock(up);
 else if (command === "doctor") await doctor();
-else if (command === "down") down();
+else if (command === "down") await withLock(down);
 else if (command === "env") printEnv();
 else {
   console.error("usage: stack.ts up | doctor | env | down");

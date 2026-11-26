@@ -2,7 +2,7 @@
 import { execFileSync } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { VERIFY_HOME, isOurs, readState } from "./paths";
+import { VERIFY_HOME, isOurs, readState, servesPort } from "./paths";
 
 const TOOLS = join(VERIFY_HOME, "tools");
 const PLAYWRIGHT_CORE = "playwright-core@1.52.0";
@@ -45,6 +45,11 @@ export async function openPanel(journey: string, viewport = { width: 1440, heigh
   chmodSync(root, 0o700);
 
   await page.goto(`${state.baseUrl}/auth/sign-in`);
+  // Checked again after the first Playwright install, which can take minutes, and right before the password is typed.
+  if (!servesPort(state) || new URL(page.url()).origin !== new URL(state.baseUrl).origin) {
+    await browser.close();
+    throw new Error(`${state.baseUrl} is not served by this stack's next dev: run \`stack.ts down\` and \`up\` again`);
+  }
   await page.getByLabel("Email").fill(state.ownerEmail);
   await page.getByLabel("Password").fill(state.ownerPassword);
   await page.getByRole("button", { name: /sign in/i }).click();
