@@ -41,15 +41,14 @@ It prints the evidence dir. The first run installs `playwright-core` into `~/.ca
 
 ```ts
 import { openPanel } from "<repo>/.claude/skills/verify/scripts/drive.ts";
-const { page, base, shot, close } = await openPanel("inbox-answer");
-await page.goto(`${base}/inbox?job=FAC-3`);
-await shot("before");
+const { page, goto, shot, close } = await openPanel("inbox-answer");
+await shot("before", undefined, await goto("/inbox?job=FAC-3"));
 await page.getByRole("list", { name: "Needs you" }).getByRole("link").first().click();
 await shot("after", page.getByRole("heading", { level: 2 }));
 await close();
 ```
 
-`shot` waits for every `aria-busy="true"` and `data-slot="skeleton"` loader to leave before capturing, and fails when the browser ended up on another origin or back on `/auth`. Every browser request goes through a local proxy that relays only connections served by this stack's `next dev` (checked by the socket's process) and answers 403 to the rest, so neither the owner's session cookie nor production rows reach another port or host, in any tab or over WebSocket, even if another server takes the port. After a click, pass a locator for what the new screen shows as the second argument: `networkidle` can already hold for the old screen. Handles are the visible English labels, `aria-label`s and route paths; the feature files list them per screen. The context runs with locale `ja-JP`, so dates render as an owner in Japan sees them.
+Open pages with `goto`, not `page.goto`: it fails on a non-2xx answer or a redirect, and passing its URL to `shot` also catches a redirect after load. `shot` waits for every `aria-busy="true"` and `data-slot="skeleton"` loader to leave before capturing, and fails when the browser ended up on another origin or back on `/auth`. Every browser request goes through a local proxy that relays only connections served by this stack's `next dev` (checked by the socket's process) and answers 403 to the rest, so neither the owner's session cookie nor production rows reach another port or host, in any tab or over WebSocket, even if another server takes the port. After a click, pass a locator for what the new screen shows as the second argument: `networkidle` can already hold for the old screen. Handles are the visible English labels, `aria-label`s and route paths; the feature files list them per screen. The context runs with locale `ja-JP`, so dates render as an owner in Japan sees them.
 
 To set up a precondition, write rows to the branch, never to production. `stack.ts sql` runs one statement on the branch and prints each row as JSON. It connects from the state file, so the password never shows in `ps`, and it fails when no stack is up rather than falling back to a `DATABASE_URL` in your shell:
 

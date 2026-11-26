@@ -84,8 +84,19 @@ async function signIn(browser: Browser, state: StackState, journey: string, view
     throw new Error(`sign-in landed on ${page.url()}, not this stack's panel`);
   }
 
+  // page.goto would follow a redirect or render an error page silently; this fails instead.
+  const goto = async (path: string) => {
+    const url = new URL(path, state.baseUrl);
+    if (!path.startsWith("/") || url.origin !== new URL(state.baseUrl).origin) throw new Error(`not a panel path: ${path}`);
+    const response = await page.goto(url.toString());
+    if (!response?.ok()) throw new Error(`${path} answered ${response?.status() ?? "nothing"}`);
+    const landed = new URL(page.url());
+    if (landed.pathname !== url.pathname || landed.search !== url.search) throw new Error(`${path} redirected to ${landed.pathname}${landed.search}`);
+    return url;
+  };
+
   // After a click, pass what the new screen shows (a heading, the selected row): networkidle may already hold for the old one.
-  // `expected` is the page the caller navigated to: a redirect to another panel page must not be saved under its label.
+  // `expected` is the URL `goto` returned: a client-side redirect after load must not be saved under its label.
   const shot = async (rawLabel: string, ready?: Locator, expected?: URL) => {
     const label = fileName(rawLabel);
     if (ready) await ready.waitFor({ timeout: 60_000 });
@@ -118,7 +129,7 @@ async function signIn(browser: Browser, state: StackState, journey: string, view
       page.off("framenavigated", onNavigate);
     }
   };
-  return { page, base: state.baseUrl, dir, shot, close: () => browser.close() };
+  return { page, base: state.baseUrl, dir, goto, shot, close: () => browser.close() };
 }
 
 if (import.meta.main) {
@@ -128,20 +139,9 @@ if (import.meta.main) {
     process.exit(2);
   }
   if (!path.startsWith("/")) throw new Error(`not a panel path: ${path}`);
-  const { page, base, dir, shot, close } = await openPanel(label);
-  // Resolved against the base the browser signed in to; cookies are not isolated by port, so nothing else is opened.
-  const url = new URL(path, base);
-  if (url.origin !== new URL(base).origin) {
-    await close();
-    throw new Error(`not a panel path: ${path}`);
-  }
-  const response = await page.goto(url.toString());
-  if (!response?.ok()) {
-    await close();
-    throw new Error(`${path} answered ${response?.status() ?? "nothing"}`);
-  }
+  const { dir, goto, shot, close } = await openPanel(label);
   try {
-    await shot(label, undefined, url);
+    await shot(label, undefined, await goto(path));
   } finally {
     await close();
   }

@@ -1,13 +1,28 @@
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, linkSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, linkSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, sep } from "node:path";
 
 export const REPO = execFileSync("git", ["rev-parse", "--show-toplevel"], { cwd: import.meta.dir, encoding: "utf8" }).trim();
 
-/** Outside the repo, so cleanup and `git clean` never touch it. */
-export const VERIFY_HOME = process.env.VERIFY_HOME ?? join(homedir(), ".cache", "marshal-factory-verify");
+/** Outside the repo, so cleanup and `git clean` never touch it and production captures never get committed. */
+export const VERIFY_HOME = outsideRepo(process.env.VERIFY_HOME || join(homedir(), ".cache", "marshal-factory-verify"));
+
+function outsideRepo(home: string): string {
+  if (!isAbsolute(home)) throw new Error(`VERIFY_HOME must be an absolute path: ${home}`);
+  // Resolved through the nearest existing ancestor, so a symlink into the checkout is caught before the dir exists.
+  let existing = home;
+  const missing: string[] = [];
+  while (!existsSync(existing)) {
+    missing.unshift(basename(existing));
+    existing = dirname(existing);
+  }
+  const real = join(realpathSync(existing), ...missing);
+  const rel = relative(realpathSync(REPO), real);
+  if (rel === "" || !(rel === ".." || rel.startsWith(`..${sep}`))) throw new Error(`VERIFY_HOME must be outside the checkout: ${home}`);
+  return real;
+}
 
 /** One stack per checkout: two worktrees can each run their own on different VERIFY_PORTs. */
 export const STATE_DIR = join(VERIFY_HOME, "stacks", createHash("sha1").update(REPO).digest("hex").slice(0, 12));

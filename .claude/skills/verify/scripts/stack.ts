@@ -49,6 +49,9 @@ async function up() {
     if ((await httpStatus(`${existing.baseUrl}/auth/sign-in`)) !== 200 || !servesPort(existing) || !branchExists(existing)) {
       throw new Error(`next dev is running but ${existing.baseUrl} does not answer for it; run \`stack.ts down\` and \`up\` again`);
     }
+    if (!onEndpoint(existing.env.DATABASE_URL, existing.endpointId) || !onEndpoint(existing.env.DATABASE_URL_UNPOOLED, existing.endpointId)) {
+      throw new Error(`the stored connection strings do not point at ${existing.endpointId}; refusing to migrate`);
+    }
     // drizzle-kit applies only the migrations the branch lacks, so a checkout that moved on gets its schema.
     execFileSync("bunx", ["drizzle-kit", "migrate"], { cwd: REPO, env: existing.env, stdio: "inherit" });
     console.log(`already up: ${existing.baseUrl} (branch ${existing.branchName}); run doctor, or down first`);
