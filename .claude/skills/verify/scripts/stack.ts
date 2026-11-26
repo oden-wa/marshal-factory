@@ -73,24 +73,35 @@ async function up() {
     neon(project, "branches", "create", "--name", name, "--parent", "main", "--expires-at", new Date(Date.now() + EXPIRES_AFTER_MS).toISOString(), "--output", "json"),
   );
   const branchId: string = created.branch.id;
-  const endpointId: string = created.endpoints[0].id;
-  mkdirSync(STATE_DIR, { recursive: true, mode: 0o700 });
-  chmodSync(STATE_DIR, 0o700);
-  const ownerPassword = `verify-${randomBytes(12).toString("base64url")}`;
-  // Per stack, so it never matches an account copied from main.
-  const ownerEmail = `verify-owner-${randomBytes(6).toString("hex")}@example.com`;
-  // Written before anything else can fail, so `down` can always delete the branch.
-  const state: StackState = { project, branchId, branchName: name, endpointId, baseUrl, port, pid: 0, pidStart: "", ownerEmail, ownerPassword, env: {} };
-  save(state);
+  let state: StackState;
+  try {
+    mkdirSync(STATE_DIR, { recursive: true, mode: 0o700 });
+    chmodSync(STATE_DIR, 0o700);
+    const endpointId: string = created.endpoints[0].id;
+    const ownerPassword = `verify-${randomBytes(12).toString("base64url")}`;
+    // Per stack, so it never matches an account copied from main.
+    const ownerEmail = `verify-owner-${randomBytes(6).toString("hex")}@example.com`;
+    state = { project, branchId, branchName: name, endpointId, baseUrl, port, pid: 0, pidStart: "", ownerEmail, ownerPassword, env: {} };
+    // From here on `down` can delete the branch.
+    save(state);
+  } catch (error) {
+    // No state file yet, so the copy of production is deleted here or named for the user to delete.
+    try {
+      neon(project, "branches", "delete", branchId, "--output", "json");
+    } catch {
+      throw new Error(`could not record or delete branch ${name} (${branchId}) in project ${project}; delete it by hand`, { cause: error });
+    }
+    throw error;
+  }
   console.log(`created branch ${name} (${branchId}), expires in 2 h`);
 
   // Until the scrub finishes the branch holds production sessions, tokens and keys, so any failure deletes it.
   let pooled: string;
   let direct: string;
   try {
-    // A child branch inherits main's role passwords; a fresh one keeps credentials from this file valid on this branch only.
-    const role = decodeURIComponent(new URL(neon(project, "connection-string", branchId).trim()).username);
-    neon(project, "roles", "reset-password", role, "--branch", branchId);
+    // A child branch inherits main's role passwords, so every role gets a fresh one; only the stack's own role's is ever read back.
+    const roles: { name: string }[] = JSON.parse(neon(project, "roles", "list", "--branch", branchId, "--output", "json"));
+    for (const { name: role } of roles) neon(project, "roles", "reset-password", role, "--branch", branchId);
     pooled = neon(project, "connection-string", branchId, "--pooled").trim();
     direct = neon(project, "connection-string", branchId).trim();
     // Checked before the migration and the owner update write anything.
@@ -106,7 +117,7 @@ async function up() {
   }
   const authBase = /Base URL:\s+(\S+)/.exec(neon(project, "neon-auth", "status", "--branch", branchId))?.[1];
   // The owner's password is sent here, so it has to be this branch's own auth service.
-  if (!authBase || !onAuthEndpoint(authBase, endpointId)) throw new Error(`the branch has no Neon Auth URL on ${endpointId}: ${authBase}`);
+  if (!authBase || !onAuthEndpoint(authBase, state.endpointId)) throw new Error(`the branch has no Neon Auth URL on ${state.endpointId}: ${authBase}`);
 
   const env: Record<string, string> = {
     PATH: process.env.PATH!,
@@ -115,12 +126,12 @@ async function up() {
     DATABASE_URL_UNPOOLED: direct,
     NEON_AUTH_BASE_URL: authBase,
     NEON_AUTH_COOKIE_SECRET: randomBytes(32).toString("base64"),
-    FACTORY_OWNER_EMAILS: ownerEmail,
+    FACTORY_OWNER_EMAILS: state.ownerEmail,
     // Turns Realtime off (next.config.ts); the branch has no Realtime config.
     VERCEL_ENV: "preview",
     // forbidInTest (lib/test-mode.ts) makes Linear, GitHub, T3 and Modal calls throw instead of reaching production.
     FACTORY_TEST_BRANCH_ID: branchId,
-    FACTORY_TEST_ENDPOINT_ID: endpointId,
+    FACTORY_TEST_ENDPOINT_ID: state.endpointId,
   };
   state.env = env;
   save(state);
@@ -132,17 +143,17 @@ async function up() {
   console.log("creating the owner account");
   neon(project, "neon-auth", "domain", "add", baseUrl, "--branch", branchId);
   // Created as an admin, so public sign-up on the hosted auth API stays closed throughout.
-  neon(project, "neon-auth", "user", "create", "--branch", branchId, "--email", ownerEmail, "--name", "Verify Owner");
+  neon(project, "neon-auth", "user", "create", "--branch", branchId, "--email", state.ownerEmail, "--name", "Verify Owner");
   const client = new Client({ connectionString: direct.replace("sslmode=require", "sslmode=verify-full") });
   await client.connect();
   // The CLI leaves the credential password empty; isOwner (lib/auth/owner.ts) also requires a verified address.
   const owner = await client.query(
     `with u as (update neon_auth."user" set "emailVerified" = true where email = $1 returning id)
      update neon_auth.account set password = $2 from u where "userId" = u.id and "providerId" = 'credential'`,
-    [ownerEmail, await hashPassword(ownerPassword)],
+    [state.ownerEmail, await hashPassword(state.ownerPassword)],
   );
   await client.end();
-  if (owner.rowCount !== 1) throw new Error(`the owner ${ownerEmail} has no credential account to set a password on`);
+  if (owner.rowCount !== 1) throw new Error(`the owner ${state.ownerEmail} has no credential account to set a password on`);
 
   const log = join(STATE_DIR, "next-dev.log");
   // The branch is a copy of production data, so the panel listens on loopback only, on the address the proxy dials.
@@ -203,6 +214,12 @@ const groupAlive = (pgid: number) => {
   }
 };
 
+/**
+ * Called once isOurs is false: a live process holding the pid has another start time, so the pid was reused.
+ * Linux never hands out a pid still in use as a process group id, so next dev's group is gone and nothing needs stopping.
+ */
+const leaderReused = (pid: number) => pid > 0 && startTime(pid) !== null;
+
 function down() {
   const state = readState();
   if (!state) {
@@ -216,7 +233,7 @@ function down() {
     while (groupAlive(state.pid) && Date.now() < deadline) Bun.sleepSync(250);
     if (groupAlive(state.pid)) throw new Error(`next dev (pgid ${state.pid}) did not stop; the state is kept`);
     console.log(`stopped next dev (pgid ${state.pid})`);
-  } else if (groupAlive(state.pid)) {
+  } else if (groupAlive(state.pid) && !leaderReused(state.pid)) {
     // The leader exited but its group lives on; without the leader its owner cannot be confirmed, so nothing is signalled.
     throw new Error(`process group ${state.pid} outlived next dev; check it with \`ps -g ${state.pid}\` and stop it by hand. The state is kept`);
   }
@@ -241,7 +258,10 @@ function onEndpoint(value: string | undefined, endpointId: string): boolean {
       DNS_NAME.test(url.hostname) &&
       (label === endpointId || label === `${endpointId}-pooler`) &&
       `.${domain.join(".")}`.endsWith(".neon.tech") &&
-      [...url.searchParams.keys()].every((name) => KNOWN_PARAMS.has(name))
+      [...url.searchParams.keys()].every((name) => KNOWN_PARAMS.has(name)) &&
+      // Anything weaker would let the copied rows cross the network in clear text.
+      url.searchParams.getAll("sslmode").length === 1 &&
+      ["require", "verify-full"].includes(url.searchParams.get("sslmode") ?? "")
     );
   } catch {
     return false;

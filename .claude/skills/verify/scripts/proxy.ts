@@ -22,6 +22,8 @@ async function servedByStack(upstream: Socket, state: StackState): Promise<boole
   return false;
 }
 
+const MAX_HEAD = 65536;
+
 // The browser's only way out: a request for this stack's panel is relayed once its socket is proven to be ours,
 // anything else gets a 403. Every connection carries one request, so one check covers everything sent on it.
 export async function panelOnlyProxy(state: StackState): Promise<{ port: number; close: () => void }> {
@@ -31,8 +33,10 @@ export async function panelOnlyProxy(state: StackState): Promise<{ port: number;
     const onData = (chunk: Buffer) => {
       head = Buffer.concat([head, chunk]);
       const end = head.indexOf("\r\n\r\n");
+      if (end > MAX_HEAD) return void client.destroy();
       if (end < 0) {
-        if (head.length > 65536) client.end(DENIED);
+        // end() only half-closes, so the socket is destroyed or the buffer would keep growing.
+        if (head.length > MAX_HEAD) client.destroy();
         return;
       }
       client.off("data", onData);
