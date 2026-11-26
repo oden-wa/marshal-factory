@@ -1,13 +1,12 @@
 #!/usr/bin/env bun
 import { execFileSync, spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { existsSync, mkdirSync, openSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, openSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { Client } from "pg";
 import { REPO, STATE_FILE, STATE_DIR, VERIFY_HOME, readState, type StackState } from "./paths";
 
 const OWNER_EMAIL = "verify-owner@example.com";
-const OWNER_PASSWORD = "verify-Passw0rd-123";
 const EXPIRES_AFTER_MS = 2 * 60 * 60 * 1000;
 
 const sh = (cmd: string, args: string[]) =>
@@ -24,14 +23,19 @@ function projectId(): string {
 
 const neon = (project: string, ...args: string[]) => sh("neon", [...args, "--project-id", project]);
 
-const pidAlive = (pid: number) => {
+const startTime = (pid: number): string | null => {
   try {
-    process.kill(pid, 0);
-    return true;
+    const stat = readFileSync(`/proc/${pid}/stat`, "utf8");
+    return stat.slice(stat.lastIndexOf(")") + 2).split(" ")[19] ?? null;
   } catch {
-    return false;
+    return null;
   }
 };
+
+const isOurs = (state: StackState) => state.pid > 0 && startTime(state.pid) === state.pidStart;
+
+// Holds the branch connection strings and the cookie secret.
+const save = (state: StackState) => writeFileSync(STATE_FILE, JSON.stringify(state, null, 2), { mode: 0o600 });
 
 async function httpStatus(url: string): Promise<number | null> {
   try {
@@ -43,7 +47,7 @@ async function httpStatus(url: string): Promise<number | null> {
 
 async function up() {
   const existing = readState();
-  if (existing && pidAlive(existing.pid)) {
+  if (existing && isOurs(existing)) {
     console.log(`already up: ${existing.baseUrl} (branch ${existing.branchName}); run doctor, or down first`);
     return;
   }
@@ -62,10 +66,12 @@ async function up() {
   );
   const branchId: string = created.branch.id;
   const endpointId: string = created.endpoints[0].id;
-  mkdirSync(STATE_DIR, { recursive: true });
+  mkdirSync(STATE_DIR, { recursive: true, mode: 0o700 });
+  chmodSync(STATE_DIR, 0o700);
+  const ownerPassword = `verify-${randomBytes(12).toString("base64url")}`;
   // Written before anything else can fail, so `down` can always delete the branch.
-  const state: StackState = { project, branchId, branchName: name, endpointId, baseUrl, port, pid: 0, ownerEmail: OWNER_EMAIL, ownerPassword: OWNER_PASSWORD, env: {} };
-  writeFileSync(STATE_FILE, JSON.stringify(state, null, 2));
+  const state: StackState = { project, branchId, branchName: name, endpointId, baseUrl, port, pid: 0, pidStart: "", ownerEmail: OWNER_EMAIL, ownerPassword, env: {} };
+  save(state);
   console.log(`created branch ${name} (${branchId}), expires in 2 h`);
 
   const pooled = neon(project, "connection-string", branchId, "--pooled").trim();
@@ -88,7 +94,7 @@ async function up() {
     FACTORY_TEST_ENDPOINT_ID: endpointId,
   };
   state.env = env;
-  writeFileSync(STATE_FILE, JSON.stringify(state, null, 2));
+  save(state);
 
   console.log("migrating the branch to this checkout's schema");
   execFileSync("bunx", ["drizzle-kit", "migrate"], { cwd: REPO, env, stdio: "inherit" });
@@ -100,7 +106,7 @@ async function up() {
   const signUp = await fetch(`${authBase}/sign-up/email`, {
     method: "POST",
     headers: { "content-type": "application/json", origin: baseUrl },
-    body: JSON.stringify({ email: OWNER_EMAIL, password: OWNER_PASSWORD, name: "Verify Owner" }),
+    body: JSON.stringify({ email: OWNER_EMAIL, password: ownerPassword, name: "Verify Owner" }),
   });
   if (!signUp.ok) throw new Error(`owner sign-up failed: ${signUp.status} ${await signUp.text()}`);
   // isOwner (lib/auth/owner.ts) also requires a verified address; no mail is sent, so mark it here.
@@ -110,7 +116,8 @@ async function up() {
   await client.end();
 
   const log = join(STATE_DIR, "next-dev.log");
-  const child = spawn("bunx", ["next", "dev", "-p", String(port)], {
+  // The branch is a copy of production data, so the panel listens on loopback only.
+  const child = spawn("bunx", ["next", "dev", "-H", "localhost", "-p", String(port)], {
     cwd: REPO,
     env,
     detached: true,
@@ -118,17 +125,18 @@ async function up() {
   });
   child.unref();
   state.pid = child.pid!;
-  writeFileSync(STATE_FILE, JSON.stringify(state, null, 2));
+  state.pidStart = startTime(state.pid) ?? "";
+  save(state);
   console.log(`next dev pid ${state.pid}, log ${log}`);
 
   // Ready means the sign-in page renders, which compiles the app shell and reaches Neon Auth.
   const deadline = Date.now() + 180_000;
   while (Date.now() < deadline) {
     if ((await httpStatus(`${baseUrl}/auth/sign-in`)) === 200) {
-      console.log(`ready: ${baseUrl}  owner ${OWNER_EMAIL} / ${OWNER_PASSWORD}`);
+      console.log(`ready: ${baseUrl}  owner ${OWNER_EMAIL} / ${ownerPassword}`);
       return;
     }
-    if (!pidAlive(state.pid)) throw new Error(`next dev exited; see ${log}`);
+    if (!isOurs(state)) throw new Error(`next dev exited; see ${log}`);
     await Bun.sleep(1000);
   }
   throw new Error(`the panel did not answer within 3 minutes; see ${log}`);
@@ -138,7 +146,7 @@ async function doctor() {
   const state = readState();
   if (!state) throw new Error("no stack: run `stack.ts up`");
   const checks: [string, boolean, string][] = [];
-  checks.push(["next dev process", state.pid > 0 && pidAlive(state.pid), `pid ${state.pid}`]);
+  checks.push(["next dev process", isOurs(state), `pid ${state.pid}`]);
   const signIn = await httpStatus(`${state.baseUrl}/auth/sign-in`);
   checks.push(["sign-in page", signIn === 200, `${state.baseUrl}/auth/sign-in -> ${signIn}`]);
   const root = await httpStatus(`${state.baseUrl}/`);
@@ -159,7 +167,7 @@ function down() {
     console.log("no stack recorded; nothing to stop");
     return;
   }
-  if (state.pid > 0 && pidAlive(state.pid)) {
+  if (isOurs(state)) {
     // Detached at launch, so the pid is a process group: this stops next dev and its workers, nothing else.
     try {
       process.kill(-state.pid, "SIGTERM");

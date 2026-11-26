@@ -17,7 +17,7 @@ Run from the checkout you want to verify (a worktree, never the main checkout: `
 bun .claude/skills/verify/scripts/stack.ts up
 ```
 
-`up` creates the Neon branch `verify-<time>-<pid>` from `main` (expires after 2 h), migrates it to this checkout's schema, turns on email and password sign-up in that branch's own Neon Auth, creates the owner `verify-owner@example.com` / `verify-Passw0rd-123` and marks the address verified, then starts `next dev` on port 3007 (`VERIFY_PORT` to change it). Ready is the line `ready: http://localhost:3007 ...`; it waits until `/auth/sign-in` renders, which takes 20 to 60 s on a cold `.next`. Realtime is off (`VERCEL_ENV=preview`), so the footer reads "Live updates off in previews" and pages show data as of load.
+`up` creates the Neon branch `verify-<time>-<pid>` from `main` (expires after 2 h), migrates it to this checkout's schema, turns on email and password sign-up in that branch's own Neon Auth, creates the owner `verify-owner@example.com` with a password generated per stack (printed on the ready line, kept in the `0600` state file) and marks the address verified, then starts `next dev` on `localhost:3007` only (`VERIFY_PORT` to change the port). Ready is the line `ready: http://localhost:3007 ...`; it waits until `/auth/sign-in` renders, which takes 20 to 60 s on a cold `.next`. Realtime is off (`VERCEL_ENV=preview`), so the footer reads "Live updates off in previews" and pages show data as of load.
 
 Port 3007 is the one production Realtime allows for local work (`neon.ts`). Two checkouts can each run a stack on different ports; state lives per checkout under `~/.cache/marshal-factory-verify/stacks/<hash>/`.
 

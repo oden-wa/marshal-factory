@@ -21,6 +21,8 @@ export type StackState = {
   baseUrl: string;
   port: number;
   pid: number;
+  /** Start time of `pid` (/proc/<pid>/stat field 22), so a reused pid is never taken for ours. */
+  pidStart: string;
   ownerEmail: string;
   ownerPassword: string;
   env: Record<string, string>;
