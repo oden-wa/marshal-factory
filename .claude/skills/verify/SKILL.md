@@ -49,7 +49,7 @@ await shot("after", page.getByRole("heading", { level: 2 }));
 await close();
 ```
 
-`shot` waits for every `aria-busy="true"` and `data-slot="skeleton"` loader to leave before capturing, and fails when the panel sent the browser back to `/auth`. After a click, pass a locator for what the new screen shows as the second argument: `networkidle` can already hold for the old screen. Handles are the visible English labels, `aria-label`s and route paths; the feature files list them per screen. The context runs with locale `ja-JP`, so dates render as an owner in Japan sees them.
+`shot` waits for every `aria-busy="true"` and `data-slot="skeleton"` loader to leave before capturing, and fails when the browser ended up on another origin or back on `/auth`. After a click, pass a locator for what the new screen shows as the second argument: `networkidle` can already hold for the old screen. Handles are the visible English labels, `aria-label`s and route paths; the feature files list them per screen. The context runs with locale `ja-JP`, so dates render as an owner in Japan sees them.
 
 To set up a precondition, write rows to the branch, never to production. `stack.ts env` prints the branch's `DATABASE_URL` and friends as `export` lines. Run the SQL only if that succeeded, in a subshell, so a missing stack never falls through to a `DATABASE_URL` already in your shell:
 

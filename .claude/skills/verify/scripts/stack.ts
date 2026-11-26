@@ -72,6 +72,9 @@ async function up() {
   save(state);
   console.log(`created branch ${name} (${branchId}), expires in 2 h`);
 
+  // A child branch inherits main's role passwords; a fresh one keeps credentials from this file valid on this branch only.
+  const role = decodeURIComponent(new URL(neon(project, "connection-string", branchId).trim()).username);
+  neon(project, "roles", "reset-password", role, "--branch", branchId);
   const pooled = neon(project, "connection-string", branchId, "--pooled").trim();
   const direct = neon(project, "connection-string", branchId).trim();
   // Checked before the migration and the owner update write anything.
@@ -105,7 +108,7 @@ async function up() {
   neon(project, "neon-auth", "domain", "add", baseUrl, "--branch", branchId);
   // Sign-up is open only while the owner is created; the hosted auth API is reachable from outside this machine.
   neon(project, "neon-auth", "config", "email-password", "update", "--branch", branchId,
-    "--disable-sign-up", "false", "--require-email-verification", "false", "--send-verification-email-on-sign-up", "false");
+    "--disable-sign-up", "false", "--require-email-verification", "true", "--send-verification-email-on-sign-up", "false");
   try {
     const signUp = await fetch(`${authBase}/sign-up/email`, {
       method: "POST",
@@ -193,6 +196,9 @@ function down() {
     while (groupAlive(state.pid) && Date.now() < deadline) Bun.sleepSync(250);
     if (groupAlive(state.pid)) throw new Error(`next dev (pgid ${state.pid}) did not stop; the state is kept`);
     console.log(`stopped next dev (pgid ${state.pid})`);
+  } else if (groupAlive(state.pid)) {
+    // The leader exited but its group lives on; without the leader its owner cannot be confirmed, so nothing is signalled.
+    throw new Error(`process group ${state.pid} outlived next dev; check it with \`ps -g ${state.pid}\` and stop it by hand. The state is kept`);
   }
   // The CLI exits 0 for a branch that is already gone, so a failure here means it still exists; keep the state to retry.
   neon(state.project, "branches", "delete", state.branchId, "--output", "json");

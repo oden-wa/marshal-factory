@@ -59,11 +59,15 @@ export async function openPanel(journey: string, viewport = { width: 1440, heigh
   // After a click, pass what the new screen shows (a heading, the selected row): networkidle may already hold for the old one.
   const shot = async (rawLabel: string, ready?: Locator) => {
     const label = fileName(rawLabel);
-    if (page.url().includes("/auth/")) throw new Error(`${label}: the panel sent the browser back to ${page.url()}`);
     if (ready) await ready.waitFor({ timeout: 60_000 });
     await page.waitForLoadState("networkidle").catch(() => {});
     // Panes stream in behind skeletons (components/panel/skeletons.tsx); networkidle fires before they resolve.
     await page.locator('[aria-busy="true"], [data-slot="skeleton"]').first().waitFor({ state: "detached", timeout: 60_000 });
+    // Checked last, so a redirect or an expired session during the waits is not saved as evidence.
+    const current = new URL(page.url());
+    if (current.origin !== new URL(state.baseUrl).origin || current.pathname.startsWith("/auth") || !servesPort(state)) {
+      throw new Error(`${label}: the browser is on ${current.href}, not this stack's panel`);
+    }
     await page.screenshot({ path: join(dir, `${label}.png`), fullPage: true });
     writeFileSync(join(dir, `${label}.txt`), `${page.url()}\n\n${await page.locator("body").innerText()}`);
     writeFileSync(join(dir, `${label}.aria.yml`), await page.locator("body").ariaSnapshot());
