@@ -51,15 +51,21 @@ async function up() {
   }
   // Overwriting the state would orphan its branch, a copy of production data, until it expires.
   if (existing) throw new Error(`a stack from an earlier run is left (branch ${existing.branchName}); run \`stack.ts down\` first`);
-  // drizzle.config.ts loads .env.local, which points at production in the main checkout.
-  if (existsSync(join(REPO, ".env.local"))) {
-    throw new Error(`${REPO}/.env.local exists and points the migration at production; run from a worktree without it`);
-  }
+  // drizzle.config.ts and next dev load these, and in the main checkout they hold production URLs and service tokens.
+  const envFiles = [".env", ".env.local", ".env.development", ".env.development.local"].filter((file) => existsSync(join(REPO, file)));
+  if (envFiles.length) throw new Error(`${envFiles.join(", ")} in ${REPO} would point the stack at production; run from a worktree without them`);
   const port = Number(process.env.VERIFY_PORT ?? 3007);
-  // httpStatus reads a bad port as a free one, so check it before copying production data.
+  // Checked before the branch copies production data.
   if (!Number.isInteger(port) || port < 1024 || port > 65535) throw new Error("VERIFY_PORT must be an integer from 1024 to 65535");
   const baseUrl = `http://localhost:${port}`;
-  if ((await httpStatus(baseUrl)) !== null) throw new Error(`${baseUrl} already answers; it is not ours, pick VERIFY_PORT`);
+  // servesPort reads a missing ss as "not served", which would only show up after the branch exists and next dev times out.
+  let listeners: string;
+  try {
+    listeners = execFileSync("ss", ["-ltnH", `sport = :${port}`], { encoding: "utf8" });
+  } catch {
+    throw new Error("`ss` (iproute2) is required to check who listens on the port");
+  }
+  if (listeners.trim()) throw new Error(`port ${port} is taken; pick VERIFY_PORT`);
 
   const project = projectId();
   const name = `verify-${new Date().toISOString().replace(/[:.]/g, "-")}-${process.pid}`;
@@ -252,7 +258,8 @@ async function sql(query: string | undefined) {
   const client = new Client({ connectionString: url!.replace("sslmode=require", "sslmode=verify-full") });
   await client.connect();
   try {
-    const result = await client.query(query);
+    // The extended protocol takes one statement, so a second one cannot commit before the output fails.
+    const result = await client.query({ text: query, queryMode: "extended" });
     for (const row of result.rows) console.log(JSON.stringify(row));
     if (result.command !== "SELECT") console.log(`${result.command} ${result.rowCount}`);
   } finally {

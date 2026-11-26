@@ -36,12 +36,15 @@ export async function openPanel(journey: string, viewport = { width: 1440, heigh
   // Another checkout's panel may hold the port now; never hand it this branch's owner password.
   if (!isOurs(state)) throw new Error("the stack's next dev is not running: run `stack.ts down` and `up` again");
   const { chromium } = await loadPlaywright();
-  // Cookies are not port-scoped by default, so a redirect or a new tab to another localhost port would carry the session.
+  // Every request but the panel's goes to a proxy that answers 403: cookies are not port-scoped, so another localhost
+  // port would get the owner's session, and the page must not send the password or production rows anywhere else.
+  const deny = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => new Response("blocked by the verify skill", { status: 403 }) });
   const browser = await chromium.launch({
     executablePath: chromePath(),
     headless: true,
-    args: ["--enable-features=EnablePortBoundCookies,EnableSchemeBoundCookies"],
+    args: [`--proxy-server=http://127.0.0.1:${deny.port}`, `--proxy-bypass-list=<-loopback>;${new URL(state.baseUrl).host}`],
   });
+  browser.on("disconnected", () => deny.stop(true));
   const context = await browser.newContext({ viewport, locale: "ja-JP", timezoneId: "Asia/Tokyo" });
   const page = await context.newPage();
   const root = join(VERIFY_HOME, "evidence");
