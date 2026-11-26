@@ -68,9 +68,13 @@ if (import.meta.main) {
     console.error("usage: drive.ts shot <path> <label>");
     process.exit(2);
   }
-  if (!path.startsWith("/") || path.startsWith("//")) throw new Error(`not a panel path: ${path}`);
-  const { page, base, dir, shot, close } = await openPanel(label);
-  await page.goto(new URL(path, base).toString());
+  const state = readState();
+  if (!state) throw new Error("no stack: run `stack.ts up`");
+  // The browser is signed in, and cookies are not isolated by port, so only the panel's own origin is opened.
+  const url = new URL(path, state.baseUrl);
+  if (!path.startsWith("/") || url.origin !== new URL(state.baseUrl).origin) throw new Error(`not a panel path: ${path}`);
+  const { page, dir, shot, close } = await openPanel(label);
+  await page.goto(url.toString());
   await shot(label);
   await close();
   console.log(dir);

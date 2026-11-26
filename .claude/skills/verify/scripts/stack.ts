@@ -41,6 +41,8 @@ async function up() {
     console.log(`already up: ${existing.baseUrl} (branch ${existing.branchName}); run doctor, or down first`);
     return;
   }
+  // Overwriting the state would orphan its branch, a copy of production data, until it expires.
+  if (existing) throw new Error(`a stack from an earlier run is left (branch ${existing.branchName}); run \`stack.ts down\` first`);
   // drizzle.config.ts loads .env.local, which points at production in the main checkout.
   if (existsSync(join(REPO, ".env.local"))) {
     throw new Error(`${REPO}/.env.local exists and points the migration at production; run from a worktree without it`);
@@ -179,10 +181,25 @@ function printEnv() {
   if (!state) throw new Error("no stack: run `stack.ts up`");
   // An empty or foreign env would leave the caller's own DATABASE_URL, possibly production, in effect.
   for (const key of ["DATABASE_URL", "DATABASE_URL_UNPOOLED"]) {
-    if (!state.env[key]?.includes(state.endpointId)) throw new Error(`stack has no ${key} on ${state.endpointId}: run \`stack.ts down\` and \`up\` again`);
+    if (!onEndpoint(state.env[key], state.endpointId)) throw new Error(`stack has no ${key} on ${state.endpointId}: run \`stack.ts down\` and \`up\` again`);
   }
   for (const [key, value] of Object.entries(state.env)) {
-    if (key !== "PATH" && key !== "HOME") console.log(`export ${key}=${JSON.stringify(value)}`);
+    if (key === "PATH" || key === "HOME") continue;
+    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) throw new Error(`not a shell variable name: ${key}`);
+    console.log(`export ${key}='${value.replaceAll("'", `'\\''`)}'`);
+  }
+}
+
+/** The URL's host is the branch endpoint (direct or pooled), and no parameter redirects the connection elsewhere. */
+function onEndpoint(value: string | undefined, endpointId: string): boolean {
+  if (!value) return false;
+  try {
+    const url = new URL(value);
+    const host = url.hostname.split(".")[0];
+    const redirects = ["host", "hostaddr", "port", "service"].some((name) => url.searchParams.has(name));
+    return (host === endpointId || host === `${endpointId}-pooler`) && !redirects;
+  } catch {
+    return false;
   }
 }
 
