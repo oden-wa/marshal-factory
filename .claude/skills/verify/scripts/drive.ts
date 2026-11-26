@@ -85,7 +85,8 @@ async function signIn(browser: Browser, state: StackState, journey: string, view
   }
 
   // After a click, pass what the new screen shows (a heading, the selected row): networkidle may already hold for the old one.
-  const shot = async (rawLabel: string, ready?: Locator) => {
+  // `expected` is the page the caller navigated to: a redirect to another panel page must not be saved under its label.
+  const shot = async (rawLabel: string, ready?: Locator, expected?: URL) => {
     const label = fileName(rawLabel);
     if (ready) await ready.waitFor({ timeout: 60_000 });
     await page.waitForLoadState("networkidle").catch(() => {});
@@ -93,7 +94,8 @@ async function signIn(browser: Browser, state: StackState, journey: string, view
     await page.locator('[aria-busy="true"], [data-slot="skeleton"]').first().waitFor({ state: "detached", timeout: 60_000 });
     // Checked last, so a redirect or an expired session during the waits is not saved as evidence.
     const current = new URL(page.url());
-    if (current.origin !== new URL(state.baseUrl).origin || current.pathname.startsWith("/auth") || !servesPort(state)) {
+    const moved = expected && (current.pathname !== expected.pathname || current.search !== expected.search);
+    if (current.origin !== new URL(state.baseUrl).origin || current.pathname.startsWith("/auth") || moved || !servesPort(state)) {
       throw new Error(`${label}: the browser is on ${current.href}, not this stack's panel`);
     }
     await page.screenshot({ path: join(dir, `${label}.png`), fullPage: true });
@@ -122,7 +124,10 @@ if (import.meta.main) {
     await close();
     throw new Error(`${path} answered ${response?.status() ?? "nothing"}`);
   }
-  await shot(label);
-  await close();
+  try {
+    await shot(label, undefined, url);
+  } finally {
+    await close();
+  }
   console.log(dir);
 }

@@ -322,8 +322,25 @@ async function sql(query: string | undefined) {
   }
 }
 
+// A failure after the scrub (migrate, the owner, next dev's startup) would leave the branch until it expires.
+async function upOrCleanUp() {
+  const before = readState();
+  try {
+    await up();
+  } catch (error) {
+    // A state from before this run is not ours to remove; a missing one means up cleaned up already.
+    if (before || !readState()) throw error;
+    try {
+      await down();
+    } catch (cleanup) {
+      throw new AggregateError([error, cleanup], "up failed and so did removing its stack; run `stack.ts down`");
+    }
+    throw error;
+  }
+}
+
 const command = process.argv[2];
-if (command === "up") await withLock(up);
+if (command === "up") await withLock(upOrCleanUp);
 else if (command === "doctor") await doctor();
 else if (command === "down") await withLock(down);
 else if (command === "sql") await sql(process.argv[3]);
