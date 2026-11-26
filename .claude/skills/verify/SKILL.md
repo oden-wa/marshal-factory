@@ -54,7 +54,7 @@ await close();
 To set up a precondition, write rows to the branch, never to production. `stack.ts env` prints the branch's `DATABASE_URL` and friends as `export` lines. Run the SQL only if that succeeded, in a subshell, so a missing stack never falls through to a `DATABASE_URL` already in your shell:
 
 ```bash
-(env_lines=$(bun .claude/skills/verify/scripts/stack.ts env) && eval "$env_lines" && psql "$DATABASE_URL_UNPOOLED" -c "select 1")
+(unset DATABASE_URL DATABASE_URL_UNPOOLED; env_lines=$(bun .claude/skills/verify/scripts/stack.ts env) && eval "$env_lines" && psql "$DATABASE_URL_UNPOOLED" -c "select 1")
 ```
 
 ## Evidence

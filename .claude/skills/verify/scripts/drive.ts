@@ -2,7 +2,7 @@
 import { execFileSync } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { VERIFY_HOME, readState } from "./paths";
+import { VERIFY_HOME, isOurs, readState } from "./paths";
 
 const TOOLS = join(VERIFY_HOME, "tools");
 const PLAYWRIGHT_CORE = "playwright-core@1.52.0";
@@ -32,6 +32,8 @@ function fileName(name: string): string {
 export async function openPanel(journey: string, viewport = { width: 1440, height: 900 }) {
   const state = readState();
   if (!state) throw new Error("no stack: run `stack.ts up`");
+  // Another checkout's panel may hold the port now; never hand it this branch's owner password.
+  if (!isOurs(state)) throw new Error("the stack's next dev is not running: run `stack.ts down` and `up` again");
   const { chromium } = await loadPlaywright();
   const browser = await chromium.launch({ executablePath: chromePath(), headless: true });
   const context = await browser.newContext({ viewport, locale: "ja-JP" });
@@ -66,6 +68,7 @@ if (import.meta.main) {
     console.error("usage: drive.ts shot <path> <label>");
     process.exit(2);
   }
+  if (!path.startsWith("/") || path.startsWith("//")) throw new Error(`not a panel path: ${path}`);
   const { page, base, dir, shot, close } = await openPanel(label);
   await page.goto(new URL(path, base).toString());
   await shot(label);

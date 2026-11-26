@@ -30,3 +30,16 @@ export type StackState = {
 
 export const readState = (): StackState | null =>
   existsSync(STATE_FILE) ? (JSON.parse(readFileSync(STATE_FILE, "utf8")) as StackState) : null;
+
+/** Field 22 of /proc/<pid>/stat; null where there is no procfs. */
+export const startTime = (pid: number): string | null => {
+  try {
+    const stat = readFileSync(`/proc/${pid}/stat`, "utf8");
+    return stat.slice(stat.lastIndexOf(")") + 2).split(" ")[19] ?? null;
+  } catch {
+    return null;
+  }
+};
+
+/** True only for the `next dev` this stack started, never for a process that reused its pid or a panel from another checkout. */
+export const isOurs = (state: StackState) => state.pid > 0 && startTime(state.pid) === state.pidStart;

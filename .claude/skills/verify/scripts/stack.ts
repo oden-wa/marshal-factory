@@ -4,7 +4,7 @@ import { randomBytes } from "node:crypto";
 import { chmodSync, existsSync, mkdirSync, openSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { Client } from "pg";
-import { REPO, STATE_FILE, STATE_DIR, VERIFY_HOME, readState, type StackState } from "./paths";
+import { REPO, STATE_FILE, STATE_DIR, VERIFY_HOME, isOurs, readState, startTime, type StackState } from "./paths";
 
 const OWNER_EMAIL = "verify-owner@example.com";
 const EXPIRES_AFTER_MS = 2 * 60 * 60 * 1000;
@@ -22,17 +22,6 @@ function projectId(): string {
 }
 
 const neon = (project: string, ...args: string[]) => sh("neon", [...args, "--project-id", project]);
-
-const startTime = (pid: number): string | null => {
-  try {
-    const stat = readFileSync(`/proc/${pid}/stat`, "utf8");
-    return stat.slice(stat.lastIndexOf(")") + 2).split(" ")[19] ?? null;
-  } catch {
-    return null;
-  }
-};
-
-const isOurs = (state: StackState) => state.pid > 0 && startTime(state.pid) === state.pidStart;
 
 // Holds the branch connection strings and the cookie secret.
 const save = (state: StackState) => writeFileSync(STATE_FILE, JSON.stringify(state, null, 2), { mode: 0o600 });
@@ -188,6 +177,10 @@ function down() {
 function printEnv() {
   const state = readState();
   if (!state) throw new Error("no stack: run `stack.ts up`");
+  // An empty or foreign env would leave the caller's own DATABASE_URL, possibly production, in effect.
+  for (const key of ["DATABASE_URL", "DATABASE_URL_UNPOOLED"]) {
+    if (!state.env[key]?.includes(state.endpointId)) throw new Error(`stack has no ${key} on ${state.endpointId}: run \`stack.ts down\` and \`up\` again`);
+  }
   for (const [key, value] of Object.entries(state.env)) {
     if (key !== "PATH" && key !== "HOME") console.log(`export ${key}=${JSON.stringify(value)}`);
   }
