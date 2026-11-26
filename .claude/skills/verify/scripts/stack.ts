@@ -56,6 +56,8 @@ async function up() {
     throw new Error(`${REPO}/.env.local exists and points the migration at production; run from a worktree without it`);
   }
   const port = Number(process.env.VERIFY_PORT ?? 3007);
+  // httpStatus reads a bad port as a free one, so check it before copying production data.
+  if (!Number.isInteger(port) || port < 1024 || port > 65535) throw new Error("VERIFY_PORT must be an integer from 1024 to 65535");
   const baseUrl = `http://localhost:${port}`;
   if ((await httpStatus(baseUrl)) !== null) throw new Error(`${baseUrl} already answers; it is not ours, pick VERIFY_PORT`);
 
