@@ -68,6 +68,10 @@ async function up() {
 
   const pooled = neon(project, "connection-string", branchId, "--pooled").trim();
   const direct = neon(project, "connection-string", branchId).trim();
+  // Checked before the migration and the owner update write anything.
+  if (!onEndpoint(pooled, state.endpointId) || !onEndpoint(direct, state.endpointId)) {
+    throw new Error(`the branch connection strings do not point at ${state.endpointId}`);
+  }
   const authBase = /Base URL:\s+(\S+)/.exec(neon(project, "neon-auth", "status", "--branch", branchId))?.[1];
   if (!authBase) throw new Error("the branch has no Neon Auth base URL");
 
@@ -148,7 +152,7 @@ async function doctor() {
     branchOk = JSON.parse(neon(state.project, "branches", "get", state.branchId, "--output", "json")).id === state.branchId;
   } catch {}
   checks.push(["neon branch", branchOk, `${state.branchName} (${state.branchId})`]);
-  checks.push(["points at the branch", state.env.DATABASE_URL?.includes(state.endpointId) ?? false, `endpoint ${state.endpointId}`]);
+  checks.push(["points at the branch", onEndpoint(state.env.DATABASE_URL, state.endpointId) && onEndpoint(state.env.DATABASE_URL_UNPOOLED, state.endpointId), `endpoint ${state.endpointId}`]);
   for (const [name, ok, detail] of checks) console.log(`${ok ? "ok  " : "FAIL"} ${name}: ${detail}`);
   if (checks.some(([, ok]) => !ok)) process.exit(1);
 }
@@ -166,12 +170,9 @@ function down() {
     } catch {}
     console.log(`stopped next dev (pgid ${state.pid})`);
   }
-  try {
-    neon(state.project, "branches", "delete", state.branchId, "--output", "json");
-    console.log(`deleted branch ${state.branchName}`);
-  } catch (error) {
-    console.log(`branch ${state.branchId} not deleted (${(error as Error).message.split("\n")[0]}); it expires on its own`);
-  }
+  // The CLI exits 0 for a branch that is already gone, so a failure here means it still exists; keep the state to retry.
+  neon(state.project, "branches", "delete", state.branchId, "--output", "json");
+  console.log(`deleted branch ${state.branchName}`);
   rmSync(STATE_FILE);
   console.log(`evidence kept under ${join(VERIFY_HOME, "evidence")}`);
 }
