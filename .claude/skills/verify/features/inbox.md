@@ -17,7 +17,7 @@ The list of jobs waiting on the owner (questions, reviews, merge decisions) with
 Preconditions: at least one job on the branch is waiting on the owner (the sidebar badge is non-zero).
 
 - **List.** `drive.ts shot /inbox inbox`. The ARIA snapshot holds `list "Needs you"` with one item per waiting job.
-- **Open an item.** In a journey, `await page.getByRole("list", { name: "Needs you" }).getByRole("link").first().click()`, then `shot("item")`. The pane's `h2` is the job title and `Why it's here` is present.
+- **Open an item.** In a journey, `await page.getByRole("list", { name: "Needs you" }).getByRole("link").first().click()`, then `shot("item", page.getByText("Why it's here"))`. The pane's `h2` is the job title and `Why it's here` is present.
 - **Close.** `await page.getByRole("link", { name: "Close" }).click()` returns to `/inbox`.
 
 ## Gotchas

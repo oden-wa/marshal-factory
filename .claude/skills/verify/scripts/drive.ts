@@ -2,6 +2,7 @@
 import { execFileSync } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import type { Locator } from "playwright-core";
 import { VERIFY_HOME, isOurs, readState, servesPort } from "./paths";
 
 const TOOLS = join(VERIFY_HOME, "tools");
@@ -55,8 +56,11 @@ export async function openPanel(journey: string, viewport = { width: 1440, heigh
   await page.getByRole("button", { name: /sign in/i }).click();
   await page.waitForURL((url) => !url.pathname.startsWith("/auth"), { timeout: 60_000 });
 
-  const shot = async (rawLabel: string) => {
+  // After a click, pass what the new screen shows (a heading, the selected row): networkidle may already hold for the old one.
+  const shot = async (rawLabel: string, ready?: Locator) => {
     const label = fileName(rawLabel);
+    if (page.url().includes("/auth/")) throw new Error(`${label}: the panel sent the browser back to ${page.url()}`);
+    if (ready) await ready.waitFor({ timeout: 60_000 });
     await page.waitForLoadState("networkidle").catch(() => {});
     // Panes stream in behind skeletons (components/panel/skeletons.tsx); networkidle fires before they resolve.
     await page.locator('[aria-busy="true"], [data-slot="skeleton"]').first().waitFor({ state: "detached", timeout: 60_000 });
@@ -81,7 +85,11 @@ if (import.meta.main) {
     await close();
     throw new Error(`not a panel path: ${path}`);
   }
-  await page.goto(url.toString());
+  const response = await page.goto(url.toString());
+  if (!response?.ok()) {
+    await close();
+    throw new Error(`${path} answered ${response?.status() ?? "nothing"}`);
+  }
   await shot(label);
   await close();
   console.log(dir);

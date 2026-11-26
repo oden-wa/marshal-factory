@@ -157,8 +157,10 @@ async function doctor() {
   checks.push(["serves the port", servesPort(state), `${state.baseUrl} answered by pgid ${state.pid}`]);
   const signIn = await httpStatus(`${state.baseUrl}/auth/sign-in`);
   checks.push(["sign-in page", signIn === 200, `${state.baseUrl}/auth/sign-in -> ${signIn}`]);
-  const root = await httpStatus(`${state.baseUrl}/`);
-  checks.push(["auth gate", root === 307 || root === 302, `/ without a session -> ${root} (redirect to sign-in)`]);
+  const gate = await fetch(`${state.baseUrl}/`, { redirect: "manual", signal: AbortSignal.timeout(5000) }).catch(() => null);
+  const target = gate?.headers.get("location") ? new URL(gate.headers.get("location")!, state.baseUrl) : null;
+  const gated = (gate?.status === 307 || gate?.status === 302) && target?.origin === new URL(state.baseUrl).origin && target.pathname === "/auth/sign-in";
+  checks.push(["auth gate", gated, `/ without a session -> ${gate?.status ?? null} ${target?.href ?? ""}`]);
   let branchOk = false;
   try {
     branchOk = JSON.parse(neon(state.project, "branches", "get", state.branchId, "--output", "json")).id === state.branchId;
@@ -169,6 +171,15 @@ async function doctor() {
   if (checks.some(([, ok]) => !ok)) process.exit(1);
 }
 
+const groupAlive = (pgid: number) => {
+  try {
+    process.kill(-pgid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+};
+
 function down() {
   const state = readState();
   if (!state) {
@@ -177,9 +188,10 @@ function down() {
   }
   if (isOurs(state)) {
     // Detached at launch, so the pid is a process group: this stops next dev and its workers, nothing else.
-    try {
-      process.kill(-state.pid, "SIGTERM");
-    } catch {}
+    process.kill(-state.pid, "SIGTERM");
+    const deadline = Date.now() + 15_000;
+    while (groupAlive(state.pid) && Date.now() < deadline) Bun.sleepSync(250);
+    if (groupAlive(state.pid)) throw new Error(`next dev (pgid ${state.pid}) did not stop; the state is kept`);
     console.log(`stopped next dev (pgid ${state.pid})`);
   }
   // The CLI exits 0 for a branch that is already gone, so a failure here means it still exists; keep the state to retry.
