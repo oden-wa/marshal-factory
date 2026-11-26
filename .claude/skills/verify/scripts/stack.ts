@@ -46,6 +46,7 @@ async function httpStatus(url: string): Promise<number | null> {
 }
 
 async function up() {
+  if (!startTime(process.pid)) throw new Error("stack.ts needs Linux /proc to identify and stop the panel it starts");
   const existing = readState();
   if (existing && isOurs(existing)) {
     console.log(`already up: ${existing.baseUrl} (branch ${existing.branchName}); run doctor, or down first`);
@@ -133,7 +134,7 @@ async function up() {
   const deadline = Date.now() + 180_000;
   while (Date.now() < deadline) {
     if ((await httpStatus(`${baseUrl}/auth/sign-in`)) === 200) {
-      console.log(`ready: ${baseUrl}  owner ${OWNER_EMAIL} / ${ownerPassword}`);
+      console.log(`ready: ${baseUrl}`);
       return;
     }
     if (!isOurs(state)) throw new Error(`next dev exited; see ${log}`);

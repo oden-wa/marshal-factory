@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { VERIFY_HOME, readState } from "./paths";
 
@@ -24,6 +24,11 @@ function chromePath(): string {
   return found;
 }
 
+function fileName(name: string): string {
+  if (!/^[\w.-]+$/.test(name) || name.startsWith(".")) throw new Error(`not a plain file name: ${JSON.stringify(name)}`);
+  return name;
+}
+
 export async function openPanel(journey: string, viewport = { width: 1440, height: 900 }) {
   const state = readState();
   if (!state) throw new Error("no stack: run `stack.ts up`");
@@ -31,8 +36,11 @@ export async function openPanel(journey: string, viewport = { width: 1440, heigh
   const browser = await chromium.launch({ executablePath: chromePath(), headless: true });
   const context = await browser.newContext({ viewport, locale: "ja-JP" });
   const page = await context.newPage();
-  const dir = join(VERIFY_HOME, "evidence", `${new Date().toISOString().replace(/[:.]/g, "-")}-${journey}`);
-  mkdirSync(dir, { recursive: true });
+  const root = join(VERIFY_HOME, "evidence");
+  const dir = join(root, `${new Date().toISOString().replace(/[:.]/g, "-")}-${fileName(journey)}`);
+  // Captures show production data copied into the branch.
+  mkdirSync(dir, { recursive: true, mode: 0o700 });
+  chmodSync(root, 0o700);
 
   await page.goto(`${state.baseUrl}/auth/sign-in`);
   await page.getByLabel("Email").fill(state.ownerEmail);
@@ -40,7 +48,8 @@ export async function openPanel(journey: string, viewport = { width: 1440, heigh
   await page.getByRole("button", { name: /sign in/i }).click();
   await page.waitForURL((url) => !url.pathname.startsWith("/auth"), { timeout: 60_000 });
 
-  const shot = async (label: string) => {
+  const shot = async (rawLabel: string) => {
+    const label = fileName(rawLabel);
     await page.waitForLoadState("networkidle").catch(() => {});
     // Panes stream in behind skeletons (components/panel/skeletons.tsx); networkidle fires before they resolve.
     await page.locator('[aria-busy="true"], [data-slot="skeleton"]').first().waitFor({ state: "detached", timeout: 60_000 });
