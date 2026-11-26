@@ -2,10 +2,11 @@
 import { execFileSync } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import type { Locator } from "playwright-core";
+import type { Locator, Page } from "playwright-core";
 import { VERIFY_HOME, isOurs, readState, servesPort } from "./paths";
 
 const TOOLS = join(VERIFY_HOME, "tools");
+const LOOPBACK = new Set(["localhost", "127.0.0.1", "[::1]"]);
 const PLAYWRIGHT_CORE = "playwright-core@1.52.0";
 
 async function loadPlaywright() {
@@ -30,6 +31,19 @@ function fileName(name: string): string {
   return name;
 }
 
+// Cookies are not port-scoped, so a request to another localhost port, redirect hops included, would carry the session.
+// Playwright's route() never sees redirect hops; the CDP Fetch domain pauses every one.
+export async function keepSessionOnPanel(page: Page, baseUrl: string) {
+  const port = new URL(baseUrl).port;
+  const cdp = await page.context().newCDPSession(page);
+  cdp.on("Fetch.requestPaused", ({ requestId, request }) => {
+    const url = new URL(request.url);
+    const allowed = !LOOPBACK.has(url.hostname) || url.port === port;
+    void cdp.send(allowed ? "Fetch.continueRequest" : "Fetch.failRequest", allowed ? { requestId } : { requestId, errorReason: "BlockedByClient" }).catch(() => {});
+  });
+  await cdp.send("Fetch.enable", { patterns: [{ urlPattern: "*", requestStage: "Request" }] });
+}
+
 export async function openPanel(journey: string, viewport = { width: 1440, height: 900 }) {
   const state = readState();
   if (!state) throw new Error("no stack: run `stack.ts up`");
@@ -39,6 +53,7 @@ export async function openPanel(journey: string, viewport = { width: 1440, heigh
   const browser = await chromium.launch({ executablePath: chromePath(), headless: true });
   const context = await browser.newContext({ viewport, locale: "ja-JP", timezoneId: "Asia/Tokyo" });
   const page = await context.newPage();
+  await keepSessionOnPanel(page, state.baseUrl);
   const root = join(VERIFY_HOME, "evidence");
   const dir = join(root, `${new Date().toISOString().replace(/[:.]/g, "-")}-${fileName(journey)}`);
   // Captures show production data copied into the branch.

@@ -17,7 +17,7 @@ Run from the checkout you want to verify (a worktree, never the main checkout: `
 bun .claude/skills/verify/scripts/stack.ts up
 ```
 
-`up` creates the Neon branch `verify-<time>-<pid>` from `main` (expires after 2 h), migrates it to this checkout's schema, opens email and password sign-up in that branch's own Neon Auth only long enough to create the owner `verify-owner-<random>@example.com` with a password generated per stack (kept only in the `0600` state file, which `drive.ts` signs in from) and marks the address verified, then starts `next dev` on `localhost:3007` only (`VERIFY_PORT` to change the port). Linux only, since it identifies the server by its `/proc` start time. Ready is the line `ready: http://localhost:3007`; it waits until `/auth/sign-in` renders, which takes 20 to 60 s on a cold `.next`. Realtime is off (`VERCEL_ENV=preview`), so the footer reads "Live updates off in previews" and pages show data as of load.
+`up` creates the Neon branch `verify-<time>-<pid>` from `main` (expires after 2 h), migrates it to this checkout's schema, creates the owner `verify-owner-<random>@example.com` as an admin in that branch's own Neon Auth, so public sign-up stays closed, with a password generated per stack (kept only in the `0600` state file, which `drive.ts` signs in from) and marks the address verified, then starts `next dev` on `localhost:3007` only (`VERIFY_PORT` to change the port). Linux only, since it identifies the server by its `/proc` start time. Ready is the line `ready: http://localhost:3007`; it waits until `/auth/sign-in` renders, which takes 20 to 60 s on a cold `.next`. Realtime is off (`VERCEL_ENV=preview`), so the footer reads "Live updates off in previews" and pages show data as of load.
 
 Port 3007 is the one production Realtime allows for local work (`neon.ts`). Two checkouts can each run a stack on different ports; state lives per checkout under `~/.cache/marshal-factory-verify/stacks/<hash>/`.
 
@@ -49,13 +49,15 @@ await shot("after", page.getByRole("heading", { level: 2 }));
 await close();
 ```
 
-`shot` waits for every `aria-busy="true"` and `data-slot="skeleton"` loader to leave before capturing, and fails when the browser ended up on another origin or back on `/auth`. After a click, pass a locator for what the new screen shows as the second argument: `networkidle` can already hold for the old screen. Handles are the visible English labels, `aria-label`s and route paths; the feature files list them per screen. The context runs with locale `ja-JP`, so dates render as an owner in Japan sees them.
+`shot` waits for every `aria-busy="true"` and `data-slot="skeleton"` loader to leave before capturing, and fails when the browser ended up on another origin or back on `/auth`. Requests to any other `localhost` port, redirect hops included, fail with `ERR_BLOCKED_BY_CLIENT`, because cookies are not port-scoped and would carry the owner's session there. After a click, pass a locator for what the new screen shows as the second argument: `networkidle` can already hold for the old screen. Handles are the visible English labels, `aria-label`s and route paths; the feature files list them per screen. The context runs with locale `ja-JP`, so dates render as an owner in Japan sees them.
 
-To set up a precondition, write rows to the branch, never to production. `stack.ts env` prints the branch's `DATABASE_URL` and friends as `export` lines. Run the SQL only if that succeeded, in a subshell, so a missing stack never falls through to a `DATABASE_URL` already in your shell:
+To set up a precondition, write rows to the branch, never to production. `stack.ts sql` runs one statement on the branch and prints each row as JSON. It connects from the state file, so the password never shows in `ps`, and it fails when no stack is up rather than falling back to a `DATABASE_URL` in your shell:
 
 ```bash
-(unset DATABASE_URL DATABASE_URL_UNPOOLED; env_lines=$(bun .claude/skills/verify/scripts/stack.ts env) && eval "$env_lines" && psql "$DATABASE_URL_UNPOOLED" -c "select 1")
+bun .claude/skills/verify/scripts/stack.ts sql "update runs set question = 'テスト' where session_id = 'mcp:factory/FAC-2'"
 ```
+
+`stack.ts env` prints the branch's `DATABASE_URL` and friends as `export` lines, for a tool that reads them from the environment.
 
 ## Evidence
 

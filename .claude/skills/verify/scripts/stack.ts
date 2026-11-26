@@ -3,6 +3,7 @@ import { execFileSync, spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { chmodSync, existsSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
+import { hashPassword } from "better-auth/crypto";
 import { Client } from "pg";
 import { REPO, STATE_FILE, STATE_DIR, VERIFY_HOME, isOurs, readState, servesPort, startTime, withLock, type StackState } from "./paths";
 
@@ -42,6 +43,9 @@ async function up() {
   if (!startTime(process.pid)) throw new Error("stack.ts needs Linux /proc to identify and stop the panel it starts");
   const existing = readState();
   if (existing && isOurs(existing)) {
+    if ((await httpStatus(`${existing.baseUrl}/auth/sign-in`)) !== 200 || !servesPort(existing)) {
+      throw new Error(`next dev is running but ${existing.baseUrl} does not answer for it; run \`stack.ts down\` and \`up\` again`);
+    }
     console.log(`already up: ${existing.baseUrl} (branch ${existing.branchName}); run doctor, or down first`);
     return;
   }
@@ -82,7 +86,8 @@ async function up() {
     throw new Error(`the branch connection strings do not point at ${state.endpointId}`);
   }
   const authBase = /Base URL:\s+(\S+)/.exec(neon(project, "neon-auth", "status", "--branch", branchId))?.[1];
-  if (!authBase) throw new Error("the branch has no Neon Auth base URL");
+  // The owner's password is sent here, so it has to be this branch's own auth service.
+  if (!authBase || !onAuthEndpoint(authBase, endpointId)) throw new Error(`the branch has no Neon Auth URL on ${endpointId}: ${authBase}`);
 
   const env: Record<string, string> = {
     PATH: process.env.PATH!,
@@ -106,24 +111,18 @@ async function up() {
 
   console.log("creating the owner account");
   neon(project, "neon-auth", "domain", "add", baseUrl, "--branch", branchId);
-  // Sign-up is open only while the owner is created; the hosted auth API is reachable from outside this machine.
-  neon(project, "neon-auth", "config", "email-password", "update", "--branch", branchId,
-    "--disable-sign-up", "false", "--require-email-verification", "true", "--send-verification-email-on-sign-up", "false");
-  try {
-    const signUp = await fetch(`${authBase}/sign-up/email`, {
-      method: "POST",
-      headers: { "content-type": "application/json", origin: baseUrl },
-      body: JSON.stringify({ email: ownerEmail, password: ownerPassword, name: "Verify Owner" }),
-    });
-    if (!signUp.ok) throw new Error(`owner sign-up failed: ${signUp.status} ${await signUp.text()}`);
-  } finally {
-    neon(project, "neon-auth", "config", "email-password", "update", "--branch", branchId, "--disable-sign-up", "true", "--require-email-verification", "true");
-  }
-  // isOwner (lib/auth/owner.ts) also requires a verified address; no mail is sent, so mark it here.
+  // Created as an admin, so public sign-up on the hosted auth API stays closed throughout.
+  neon(project, "neon-auth", "user", "create", "--branch", branchId, "--email", ownerEmail, "--name", "Verify Owner");
   const client = new Client({ connectionString: direct.replace("sslmode=require", "sslmode=verify-full") });
   await client.connect();
-  await client.query(`update neon_auth."user" set "emailVerified" = true where email = $1`, [ownerEmail]);
+  // The CLI leaves the credential password empty; isOwner (lib/auth/owner.ts) also requires a verified address.
+  const owner = await client.query(
+    `with u as (update neon_auth."user" set "emailVerified" = true where email = $1 returning id)
+     update neon_auth.account set password = $2 from u where "userId" = u.id and "providerId" = 'credential'`,
+    [ownerEmail, await hashPassword(ownerPassword)],
+  );
   await client.end();
+  if (owner.rowCount !== 1) throw new Error(`the owner ${ownerEmail} has no credential account to set a password on`);
 
   const log = join(STATE_DIR, "next-dev.log");
   // The branch is a copy of production data, so the panel listens on loopback only.
@@ -233,6 +232,8 @@ function onEndpoint(value: string | undefined, endpointId: string): boolean {
     const [label, ...domain] = url.hostname.split(".");
     return (
       (url.protocol === "postgresql:" || url.protocol === "postgres:") &&
+      // libpq reads a comma-separated host list, so allow one DNS name only.
+      DNS_NAME.test(url.hostname) &&
       (label === endpointId || label === `${endpointId}-pooler`) &&
       `.${domain.join(".")}`.endsWith(".neon.tech") &&
       [...url.searchParams.keys()].every((name) => KNOWN_PARAMS.has(name))
@@ -242,12 +243,42 @@ function onEndpoint(value: string | undefined, endpointId: string): boolean {
   }
 }
 
+const DNS_NAME = /^[a-z0-9-]+(\.[a-z0-9-]+)+$/;
+
+function onAuthEndpoint(value: string, endpointId: string): boolean {
+  try {
+    const url = new URL(value);
+    return url.protocol === "https:" && url.port === "" && DNS_NAME.test(url.hostname) &&
+      url.hostname.startsWith(`${endpointId}.neonauth.`) && url.hostname.endsWith(".neon.tech");
+  } catch {
+    return false;
+  }
+}
+
+// Connects from the state file, so the password never appears in a process's arguments.
+async function sql(query: string | undefined) {
+  if (!query) throw new Error("usage: stack.ts sql '<query>'");
+  const state = readState();
+  const url = state?.env.DATABASE_URL_UNPOOLED;
+  if (!state || !onEndpoint(url, state.endpointId)) throw new Error("no stack: run `stack.ts up`");
+  const client = new Client({ connectionString: url!.replace("sslmode=require", "sslmode=verify-full") });
+  await client.connect();
+  try {
+    const result = await client.query(query);
+    for (const row of result.rows) console.log(JSON.stringify(row));
+    if (result.command !== "SELECT") console.log(`${result.command} ${result.rowCount}`);
+  } finally {
+    await client.end();
+  }
+}
+
 const command = process.argv[2];
 if (command === "up") await withLock(up);
 else if (command === "doctor") await doctor();
 else if (command === "down") await withLock(down);
 else if (command === "env") printEnv();
+else if (command === "sql") await sql(process.argv[3]);
 else {
-  console.error("usage: stack.ts up | doctor | env | down");
+  console.error("usage: stack.ts up | doctor | env | sql <query> | down");
   process.exit(2);
 }
