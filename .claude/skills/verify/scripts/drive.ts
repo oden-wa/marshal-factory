@@ -1,0 +1,65 @@
+#!/usr/bin/env bun
+import { execFileSync } from "node:child_process";
+import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { VERIFY_HOME, readState } from "./paths";
+
+const TOOLS = join(VERIFY_HOME, "tools");
+const PLAYWRIGHT_CORE = "playwright-core@1.52.0";
+
+async function loadPlaywright() {
+  const entry = join(TOOLS, "node_modules", "playwright-core", "index.js");
+  if (!existsSync(entry)) {
+    // Kept out of package.json: the panel does not depend on a browser driver.
+    mkdirSync(TOOLS, { recursive: true });
+    execFileSync("bun", ["add", PLAYWRIGHT_CORE], { cwd: TOOLS, stdio: "inherit" });
+  }
+  return (await import(entry)) as typeof import("playwright-core");
+}
+
+function chromePath(): string {
+  const candidates = [process.env.CHROME_PATH, "/usr/bin/google-chrome", "/usr/bin/chromium", "/usr/bin/chromium-browser"];
+  const found = candidates.find((path) => path && existsSync(path));
+  if (!found) throw new Error("no Chrome found: set CHROME_PATH");
+  return found;
+}
+
+export async function openPanel(journey: string, viewport = { width: 1440, height: 900 }) {
+  const state = readState();
+  if (!state) throw new Error("no stack: run `stack.ts up`");
+  const { chromium } = await loadPlaywright();
+  const browser = await chromium.launch({ executablePath: chromePath(), headless: true });
+  const context = await browser.newContext({ viewport, locale: "ja-JP" });
+  const page = await context.newPage();
+  const dir = join(VERIFY_HOME, "evidence", `${new Date().toISOString().replace(/[:.]/g, "-")}-${journey}`);
+  mkdirSync(dir, { recursive: true });
+
+  await page.goto(`${state.baseUrl}/auth/sign-in`);
+  await page.getByLabel("Email").fill(state.ownerEmail);
+  await page.getByLabel("Password").fill(state.ownerPassword);
+  await page.getByRole("button", { name: /sign in/i }).click();
+  await page.waitForURL((url) => !url.pathname.startsWith("/auth"), { timeout: 60_000 });
+
+  const shot = async (label: string) => {
+    await page.waitForLoadState("networkidle").catch(() => {});
+    // Panes stream in behind skeletons (components/panel/skeletons.tsx); networkidle fires before they resolve.
+    await page.locator('[aria-busy="true"], [data-slot="skeleton"]').first().waitFor({ state: "detached", timeout: 60_000 });
+    await page.screenshot({ path: join(dir, `${label}.png`), fullPage: true });
+    writeFileSync(join(dir, `${label}.txt`), `${page.url()}\n\n${await page.locator("body").innerText()}`);
+    writeFileSync(join(dir, `${label}.aria.yml`), await page.locator("body").ariaSnapshot());
+  };
+  return { page, base: state.baseUrl, dir, shot, close: () => browser.close() };
+}
+
+if (import.meta.main) {
+  const [command, path, label] = process.argv.slice(2);
+  if (command !== "shot" || !path || !label) {
+    console.error("usage: drive.ts shot <path> <label>");
+    process.exit(2);
+  }
+  const { page, base, dir, shot, close } = await openPanel(label);
+  await page.goto(new URL(path, base).toString());
+  await shot(label);
+  await close();
+  console.log(dir);
+}
