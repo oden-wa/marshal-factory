@@ -62,6 +62,7 @@ for (const path of [factoryPlaybook("modal"), factoryPlaybook("local")]) {
 }
 
 // Every message to a thread asks for Japanese, and both playbooks carry the rule it points at.
+assert.match(OWNER_LANGUAGE, /\bin Japanese\b/, "the shared line asks for Japanese");
 for (const [name, text] of [
   ["launch", await withPlaybook("Work FAC-1: Title", "local", host(false), "/work/repo")],
   ["conflict", conflictMessage("FAC-1", "https://github.com/o/r/pull/1", factoryPlaybook("local"))],
