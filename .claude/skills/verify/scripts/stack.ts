@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
 import { execFileSync, spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { chmodSync, existsSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { hashPassword } from "better-auth/crypto";
 import { Client } from "pg";
@@ -84,18 +84,21 @@ async function up() {
   save(state);
   console.log(`created branch ${name} (${branchId}), expires in 2 h`);
 
-  // A child branch inherits main's role passwords; a fresh one keeps credentials from this file valid on this branch only.
-  const role = decodeURIComponent(new URL(neon(project, "connection-string", branchId).trim()).username);
-  neon(project, "roles", "reset-password", role, "--branch", branchId);
-  const pooled = neon(project, "connection-string", branchId, "--pooled").trim();
-  const direct = neon(project, "connection-string", branchId).trim();
-  // Checked before the migration and the owner update write anything.
-  if (!onEndpoint(pooled, state.endpointId) || !onEndpoint(direct, state.endpointId)) {
-    throw new Error(`the branch connection strings do not point at ${state.endpointId}`);
-  }
-  // First write on the branch: the migration and everything after it run without production sessions, tokens or keys.
-  console.log("removing copied credentials and sessions");
+  // Until the scrub finishes the branch holds production sessions, tokens and keys, so any failure deletes it.
+  let pooled: string;
+  let direct: string;
   try {
+    // A child branch inherits main's role passwords; a fresh one keeps credentials from this file valid on this branch only.
+    const role = decodeURIComponent(new URL(neon(project, "connection-string", branchId).trim()).username);
+    neon(project, "roles", "reset-password", role, "--branch", branchId);
+    pooled = neon(project, "connection-string", branchId, "--pooled").trim();
+    direct = neon(project, "connection-string", branchId).trim();
+    // Checked before the migration and the owner update write anything.
+    if (!onEndpoint(pooled, state.endpointId) || !onEndpoint(direct, state.endpointId)) {
+      throw new Error(`the branch connection strings do not point at ${state.endpointId}`);
+    }
+    // First write on the branch: the migration and everything after it run without production sessions, tokens or keys.
+    console.log("removing copied credentials and sessions");
     await scrubAuth(direct);
   } catch (error) {
     down();
@@ -143,12 +146,15 @@ async function up() {
 
   const log = join(STATE_DIR, "next-dev.log");
   // The branch is a copy of production data, so the panel listens on loopback only, on the address the proxy dials.
+  // One descriptor for both streams, so stderr never overwrites stdout at a stale offset.
+  const logFd = openSync(log, "w");
   const child = spawn("bunx", ["next", "dev", "-H", "127.0.0.1", "-p", String(port)], {
     cwd: REPO,
     env,
     detached: true,
-    stdio: ["ignore", openSync(log, "w"), openSync(log, "a")],
+    stdio: ["ignore", logFd, logFd],
   });
+  closeSync(logFd);
   child.unref();
   state.pid = child.pid!;
   state.pidStart = startTime(state.pid) ?? "";

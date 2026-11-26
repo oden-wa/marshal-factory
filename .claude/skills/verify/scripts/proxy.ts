@@ -43,14 +43,19 @@ export async function panelOnlyProxy(state: StackState): Promise<{ port: number;
   });
 
   const relay = (client: Socket, lines: string[], rest: Buffer) => {
-    const [method, target, version] = lines[0].split(" ");
+    const parts = lines[0].split(" ");
+    if (parts.length !== 3 || !parts[1] || !/^HTTP\/1\.[01]$/.test(parts[2])) {
+      client.end(DENIED);
+      return;
+    }
+    const [method, target, version] = parts;
     let host: string;
     let port: number;
     let first: Buffer | null = null;
     if (method === "CONNECT") {
       const at = target.lastIndexOf(":");
       host = target.slice(0, at);
-      port = Number(target.slice(at + 1));
+      port = at > 0 && /^\d{1,5}$/.test(target.slice(at + 1)) ? Number(target.slice(at + 1)) : -1;
     } else {
       let url: URL;
       try {

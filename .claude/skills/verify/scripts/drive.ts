@@ -44,6 +44,8 @@ export async function openPanel(journey: string, viewport = { width: 1440, heigh
     browser = await chromium.launch({
       executablePath: chromePath(),
       headless: true,
+      // The page renders production rows; refuse to run it without Chrome's sandbox.
+      chromiumSandbox: true,
       // <-loopback> drops Chrome's built-in bypass, so localhost goes through the proxy too.
       args: [`--proxy-server=http://127.0.0.1:${proxy.port}`, "--proxy-bypass-list=<-loopback>", "--force-webrtc-ip-handling-policy=disable_non_proxied_udp"],
     });
