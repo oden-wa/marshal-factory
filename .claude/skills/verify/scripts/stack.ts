@@ -54,7 +54,7 @@ async function up() {
   const project = projectId();
   const name = `verify-${new Date().toISOString().replace(/[:.]/g, "-")}-${process.pid}`;
   const created = JSON.parse(
-    neon(project, "branches", "create", "--name", name, "--expires-at", new Date(Date.now() + EXPIRES_AFTER_MS).toISOString(), "--output", "json"),
+    neon(project, "branches", "create", "--name", name, "--parent", "main", "--expires-at", new Date(Date.now() + EXPIRES_AFTER_MS).toISOString(), "--output", "json"),
   );
   const branchId: string = created.branch.id;
   const endpointId: string = created.endpoints[0].id;
@@ -191,14 +191,20 @@ function printEnv() {
   }
 }
 
-/** The URL's host is the branch endpoint (direct or pooled), and no parameter redirects the connection elsewhere. */
+const KNOWN_PARAMS = new Set(["sslmode", "channel_binding"]);
+
+/** A Neon Postgres URL whose host is the branch endpoint (direct or pooled), with no parameter that could redirect it. */
 function onEndpoint(value: string | undefined, endpointId: string): boolean {
   if (!value) return false;
   try {
     const url = new URL(value);
-    const host = url.hostname.split(".")[0];
-    const redirects = ["host", "hostaddr", "port", "service"].some((name) => url.searchParams.has(name));
-    return (host === endpointId || host === `${endpointId}-pooler`) && !redirects;
+    const [label, ...domain] = url.hostname.split(".");
+    return (
+      (url.protocol === "postgresql:" || url.protocol === "postgres:") &&
+      (label === endpointId || label === `${endpointId}-pooler`) &&
+      `.${domain.join(".")}`.endsWith(".neon.tech") &&
+      [...url.searchParams.keys()].every((name) => KNOWN_PARAMS.has(name))
+    );
   } catch {
     return false;
   }
