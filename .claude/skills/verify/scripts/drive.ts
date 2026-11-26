@@ -2,7 +2,7 @@
 import { execFileSync } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import type { Browser, Locator } from "playwright-core";
+import type { Browser, Frame, Locator } from "playwright-core";
 import { VERIFY_HOME, isOurs, readState, servesPort, type StackState } from "./paths";
 import { panelOnlyProxy } from "./proxy";
 
@@ -98,9 +98,25 @@ async function signIn(browser: Browser, state: StackState, journey: string, view
     if (current.origin !== new URL(state.baseUrl).origin || current.pathname.startsWith("/auth") || moved || !servesPort(state)) {
       throw new Error(`${label}: the browser is on ${current.href}, not this stack's panel`);
     }
-    await page.screenshot({ path: join(dir, `${label}.png`), fullPage: true });
-    writeFileSync(join(dir, `${label}.txt`), `${page.url()}\n\n${await page.locator("body").innerText()}`);
-    writeFileSync(join(dir, `${label}.aria.yml`), await page.locator("body").ariaSnapshot());
+    // Everything is read before anything is written, so a navigation mid-capture cannot mix two screens under one label.
+    let navigated = false;
+    const onNavigate = (frame: Frame) => {
+      if (frame === page.mainFrame()) navigated = true;
+    };
+    page.on("framenavigated", onNavigate);
+    try {
+      const image = await page.screenshot({ fullPage: true });
+      const text = await page.locator("body").innerText();
+      const aria = await page.locator("body").ariaSnapshot();
+      if (navigated || page.url() !== current.href || !servesPort(state)) {
+        throw new Error(`${label}: the page changed during capture; nothing was saved`);
+      }
+      writeFileSync(join(dir, `${label}.png`), image);
+      writeFileSync(join(dir, `${label}.txt`), `${current.href}\n\n${text}`);
+      writeFileSync(join(dir, `${label}.aria.yml`), aria);
+    } finally {
+      page.off("framenavigated", onNavigate);
+    }
   };
   return { page, base: state.baseUrl, dir, shot, close: () => browser.close() };
 }

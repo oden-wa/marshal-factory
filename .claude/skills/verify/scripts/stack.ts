@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
 import { execFileSync, spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { chmodSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, closeSync, existsSync, mkdirSync, openSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { hashPassword } from "better-auth/crypto";
 import { Client } from "pg";
@@ -46,6 +46,8 @@ async function up() {
     if ((await httpStatus(`${existing.baseUrl}/auth/sign-in`)) !== 200 || !servesPort(existing) || !branchExists(existing)) {
       throw new Error(`next dev is running but ${existing.baseUrl} does not answer for it; run \`stack.ts down\` and \`up\` again`);
     }
+    // drizzle-kit applies only the migrations the branch lacks, so a checkout that moved on gets its schema.
+    execFileSync("bunx", ["drizzle-kit", "migrate"], { cwd: REPO, env: existing.env, stdio: "inherit" });
     console.log(`already up: ${existing.baseUrl} (branch ${existing.branchName}); run doctor, or down first`);
     return;
   }
@@ -203,15 +205,20 @@ async function doctor() {
   if (checks.some(([, ok]) => !ok)) process.exit(1);
 }
 
+/** A member that is not a zombie: kill(-pgid, 0) also succeeds for zombies nobody reaps, which would stall `down`. */
 const groupAlive = (pgid: number) => {
-  // 0 means up failed before next dev started; process.kill(-0) would probe this process's own group.
+  // 0 means up failed before next dev started.
   if (pgid <= 0) return false;
-  try {
-    process.kill(-pgid, 0);
-    return true;
-  } catch {
-    return false;
-  }
+  return readdirSync("/proc").some((entry) => {
+    if (!/^\d+$/.test(entry)) return false;
+    try {
+      const stat = readFileSync(`/proc/${entry}/stat`, "utf8");
+      const [state, , pgrp] = stat.slice(stat.lastIndexOf(")") + 2).split(" ");
+      return Number(pgrp) === pgid && state !== "Z";
+    } catch {
+      return false;
+    }
+  });
 };
 
 /**
@@ -226,20 +233,27 @@ function down() {
     console.log("no stack recorded; nothing to stop");
     return;
   }
+  // The branch is deleted even when the process cannot be stopped, so a copy of production never outlives a stuck server.
+  const failures: string[] = [];
   if (isOurs(state)) {
     // Detached at launch, so the pid is a process group: this stops next dev and its workers, nothing else.
     process.kill(-state.pid, "SIGTERM");
     const deadline = Date.now() + 15_000;
     while (groupAlive(state.pid) && Date.now() < deadline) Bun.sleepSync(250);
-    if (groupAlive(state.pid)) throw new Error(`next dev (pgid ${state.pid}) did not stop; the state is kept`);
-    console.log(`stopped next dev (pgid ${state.pid})`);
+    if (groupAlive(state.pid)) failures.push(`next dev (pgid ${state.pid}) did not stop`);
+    else console.log(`stopped next dev (pgid ${state.pid})`);
   } else if (groupAlive(state.pid) && !leaderReused(state.pid)) {
     // The leader exited but its group lives on; without the leader its owner cannot be confirmed, so nothing is signalled.
-    throw new Error(`process group ${state.pid} outlived next dev; check it with \`ps -g ${state.pid}\` and stop it by hand. The state is kept`);
+    failures.push(`process group ${state.pid} outlived next dev; check it with \`ps -g ${state.pid}\` and stop it by hand`);
   }
-  // The CLI exits 0 for a branch that is already gone, so a failure here means it still exists; keep the state to retry.
-  neon(state.project, "branches", "delete", state.branchId, "--output", "json");
-  console.log(`deleted branch ${state.branchName}`);
+  try {
+    // The CLI exits 0 for a branch that is already gone, so a failure here means it still exists.
+    neon(state.project, "branches", "delete", state.branchId, "--output", "json");
+    console.log(`deleted branch ${state.branchName}`);
+  } catch (error) {
+    failures.push(`branch ${state.branchName} (${state.branchId}) was not deleted: ${(error as Error).message}`);
+  }
+  if (failures.length) throw new Error(`${failures.join("; ")}. The state is kept, so \`stack.ts down\` can retry`);
   rmSync(STATE_FILE);
   console.log(`evidence kept under ${join(VERIFY_HOME, "evidence")}`);
 }
