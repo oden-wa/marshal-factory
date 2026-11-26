@@ -175,6 +175,8 @@ async function doctor() {
 }
 
 const groupAlive = (pgid: number) => {
+  // 0 means up failed before next dev started; process.kill(-0) would probe this process's own group.
+  if (pgid <= 0) return false;
   try {
     process.kill(-pgid, 0);
     return true;

@@ -37,7 +37,7 @@ export async function openPanel(journey: string, viewport = { width: 1440, heigh
   if (!isOurs(state)) throw new Error("the stack's next dev is not running: run `stack.ts down` and `up` again");
   const { chromium } = await loadPlaywright();
   const browser = await chromium.launch({ executablePath: chromePath(), headless: true });
-  const context = await browser.newContext({ viewport, locale: "ja-JP" });
+  const context = await browser.newContext({ viewport, locale: "ja-JP", timezoneId: "Asia/Tokyo" });
   const page = await context.newPage();
   const root = join(VERIFY_HOME, "evidence");
   const dir = join(root, `${new Date().toISOString().replace(/[:.]/g, "-")}-${fileName(journey)}`);
@@ -55,6 +55,10 @@ export async function openPanel(journey: string, viewport = { width: 1440, heigh
   await page.getByLabel("Password").fill(state.ownerPassword);
   await page.getByRole("button", { name: /sign in/i }).click();
   await page.waitForURL((url) => !url.pathname.startsWith("/auth"), { timeout: 60_000 });
+  if (new URL(page.url()).origin !== new URL(state.baseUrl).origin) {
+    await browser.close();
+    throw new Error(`sign-in landed on ${page.url()}, not this stack's panel`);
+  }
 
   // After a click, pass what the new screen shows (a heading, the selected row): networkidle may already hold for the old one.
   const shot = async (rawLabel: string, ready?: Locator) => {
