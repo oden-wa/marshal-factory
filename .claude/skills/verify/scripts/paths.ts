@@ -61,7 +61,7 @@ export const servesPort = (state: StackState): boolean => {
   });
 };
 
-const processGroup = (pid: number): number | null => {
+export const processGroup = (pid: number): number | null => {
   try {
     const stat = readFileSync(`/proc/${pid}/stat`, "utf8");
     return Number(stat.slice(stat.lastIndexOf(")") + 2).split(" ")[2]);

@@ -43,7 +43,7 @@ async function up() {
   if (!startTime(process.pid)) throw new Error("stack.ts needs Linux /proc to identify and stop the panel it starts");
   const existing = readState();
   if (existing && isOurs(existing)) {
-    if ((await httpStatus(`${existing.baseUrl}/auth/sign-in`)) !== 200 || !servesPort(existing)) {
+    if ((await httpStatus(`${existing.baseUrl}/auth/sign-in`)) !== 200 || !servesPort(existing) || !branchExists(existing)) {
       throw new Error(`next dev is running but ${existing.baseUrl} does not answer for it; run \`stack.ts down\` and \`up\` again`);
     }
     console.log(`already up: ${existing.baseUrl} (branch ${existing.branchName}); run doctor, or down first`);
@@ -117,6 +117,9 @@ async function up() {
   console.log("migrating the branch to this checkout's schema");
   execFileSync("bunx", ["drizzle-kit", "migrate"], { cwd: REPO, env, stdio: "inherit" });
 
+  console.log("removing copied credentials and sessions");
+  await scrubAuth(direct);
+
   console.log("creating the owner account");
   neon(project, "neon-auth", "domain", "add", baseUrl, "--branch", branchId);
   // Created as an admin, so public sign-up on the hosted auth API stays closed throughout.
@@ -171,11 +174,7 @@ async function doctor() {
   const target = gate?.headers.get("location") ? new URL(gate.headers.get("location")!, state.baseUrl) : null;
   const gated = (gate?.status === 307 || gate?.status === 302) && target?.origin === new URL(state.baseUrl).origin && target.pathname === "/auth/sign-in";
   checks.push(["auth gate", gated, `/ without a session -> ${gate?.status ?? null} ${target?.href ?? ""}`]);
-  let branchOk = false;
-  try {
-    branchOk = JSON.parse(neon(state.project, "branches", "get", state.branchId, "--output", "json")).id === state.branchId;
-  } catch {}
-  checks.push(["neon branch", branchOk, `${state.branchName} (${state.branchId})`]);
+  checks.push(["neon branch", branchExists(state), `${state.branchName} (${state.branchId})`]);
   checks.push(["points at the branch", onEndpoint(state.env.DATABASE_URL, state.endpointId) && onEndpoint(state.env.DATABASE_URL_UNPOOLED, state.endpointId), `endpoint ${state.endpointId}`]);
   for (const [name, ok, detail] of checks) console.log(`${ok ? "ok  " : "FAIL"} ${name}: ${detail}`);
   if (checks.some(([, ok]) => !ok)) process.exit(1);
@@ -246,6 +245,30 @@ function onAuthEndpoint(value: string, endpointId: string): boolean {
       url.hostname.startsWith(`${endpointId}.neonauth.`) && url.hostname.endsWith(".neon.tech");
   } catch {
     return false;
+  }
+}
+
+// The branch expires after EXPIRES_AFTER_MS, while next dev keeps running against a database that is gone.
+function branchExists(state: StackState): boolean {
+  try {
+    return JSON.parse(neon(state.project, "branches", "get", state.branchId, "--output", "json")).id === state.branchId;
+  } catch {
+    return false;
+  }
+}
+
+// The branch copies production's auth tables: password hashes, OAuth tokens, live sessions and the JWT signing key.
+// Neon Auth makes a new signing key on the next sign-in.
+async function scrubAuth(direct: string) {
+  const client = new Client({ connectionString: direct.replace("sslmode=require", "sslmode=verify-full") });
+  await client.connect();
+  try {
+    await client.query("begin");
+    await client.query(`update neon_auth.account set password = null, "accessToken" = null, "refreshToken" = null, "idToken" = null`);
+    for (const table of ["session", "verification", "jwks"]) await client.query(`delete from neon_auth.${table}`);
+    await client.query("commit");
+  } finally {
+    await client.end();
   }
 }
 

@@ -2,8 +2,9 @@
 import { execFileSync } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import type { Locator } from "playwright-core";
-import { VERIFY_HOME, isOurs, readState, servesPort } from "./paths";
+import type { Browser, Locator } from "playwright-core";
+import { VERIFY_HOME, isOurs, readState, servesPort, type StackState } from "./paths";
+import { panelOnlyProxy } from "./proxy";
 
 const TOOLS = join(VERIFY_HOME, "tools");
 const PLAYWRIGHT_CORE = "playwright-core@1.52.0";
@@ -36,15 +37,30 @@ export async function openPanel(journey: string, viewport = { width: 1440, heigh
   // Another checkout's panel may hold the port now; never hand it this branch's owner password.
   if (!isOurs(state)) throw new Error("the stack's next dev is not running: run `stack.ts down` and `up` again");
   const { chromium } = await loadPlaywright();
-  // Every request but the panel's goes to a proxy that answers 403: cookies are not port-scoped, so another localhost
-  // port would get the owner's session, and the page must not send the password or production rows anywhere else.
-  const deny = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => new Response("blocked by the verify skill", { status: 403 }) });
-  const browser = await chromium.launch({
-    executablePath: chromePath(),
-    headless: true,
-    args: [`--proxy-server=http://127.0.0.1:${deny.port}`, `--proxy-bypass-list=<-loopback>;${new URL(state.baseUrl).host}`],
-  });
-  browser.on("disconnected", () => deny.stop(true));
+  // Cookies are not port-scoped and the branch holds production rows, so the browser reaches nothing but this panel.
+  const proxy = await panelOnlyProxy(state);
+  let browser: Browser;
+  try {
+    browser = await chromium.launch({
+      executablePath: chromePath(),
+      headless: true,
+      // <-loopback> drops Chrome's built-in bypass, so localhost goes through the proxy too.
+      args: [`--proxy-server=http://127.0.0.1:${proxy.port}`, "--proxy-bypass-list=<-loopback>", "--force-webrtc-ip-handling-policy=disable_non_proxied_udp"],
+    });
+  } catch (error) {
+    proxy.close();
+    throw error;
+  }
+  browser.on("disconnected", proxy.close);
+  try {
+    return await signIn(browser, state, journey, viewport);
+  } catch (error) {
+    await browser.close();
+    throw error;
+  }
+}
+
+async function signIn(browser: Browser, state: StackState, journey: string, viewport: { width: number; height: number }) {
   const context = await browser.newContext({ viewport, locale: "ja-JP", timezoneId: "Asia/Tokyo" });
   const page = await context.newPage();
   const root = join(VERIFY_HOME, "evidence");
@@ -56,7 +72,6 @@ export async function openPanel(journey: string, viewport = { width: 1440, heigh
   await page.goto(`${state.baseUrl}/auth/sign-in`);
   // Checked again after the first Playwright install, which can take minutes, and right before the password is typed.
   if (!servesPort(state) || new URL(page.url()).origin !== new URL(state.baseUrl).origin) {
-    await browser.close();
     throw new Error(`${state.baseUrl} is not served by this stack's next dev: run \`stack.ts down\` and \`up\` again`);
   }
   await page.locator('input[type="email"]').fill(state.ownerEmail);
@@ -64,7 +79,6 @@ export async function openPanel(journey: string, viewport = { width: 1440, heigh
   await page.locator('form button[type="submit"]').click();
   await page.waitForURL((url) => !url.pathname.startsWith("/auth"), { timeout: 60_000 });
   if (new URL(page.url()).origin !== new URL(state.baseUrl).origin) {
-    await browser.close();
     throw new Error(`sign-in landed on ${page.url()}, not this stack's panel`);
   }
 
