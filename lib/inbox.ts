@@ -98,7 +98,7 @@ export function inboxReason(item: InboxItem<InboxJob & Pick<JobRow, "question" |
     case "question":
       return job.question ?? job.stage_summary ?? "エージェントが回答を待っています。";
     case "revert_failed":
-      return `マージ後に main が赤くなり、リバートにも失敗しました${decision?.watch?.reason ? `: ${decision.watch.reason}` : "。"}`;
+      return `マージ後に ${decision?.merged?.base ?? "main"} が赤くなり、リバートにも失敗しました${decision?.watch?.reason ? `: ${decision.watch.reason}` : "。"}`;
     case "handover":
       if (decision?.outcome === "merge" && decision.autonomy === "trial") return "マージ可と判断（試行）";
       return decision?.reasons[0] ?? "レビューをお願いします";
@@ -212,7 +212,7 @@ export function followUpIssue(job: FollowUpJob, decision: MergeDecision | null, 
       "",
       "---",
       "",
-      `ファクトリーが ${job.key}${job.pr_url ? ` (${job.pr_url})` : ""} をマージした後に main が赤くなり、自動リバートも失敗しました。`,
+      `ファクトリーが ${job.key}${job.pr_url ? ` (${job.pr_url})` : ""} をマージした後に ${base} が赤くなり、自動リバートも失敗しました。`,
       "",
       ...(watch && watch.failed.length > 0 ? [`- ${base} で失敗したチェック: ${watch.failed.join(", ")}`] : []),
       ...(job.pr_url ? [`- マージしたプルリクエスト: ${job.pr_url}`] : []),
