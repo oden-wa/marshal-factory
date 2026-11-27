@@ -50,7 +50,7 @@ export async function revertMerge(prUrl: string, merged: FactoryMerge, failed: r
   const existing = await github.pullRequestForBranch(repo, branch);
   if (existing?.state === "merged") return { ok: true, url: existing.url };
   const checkout = await revertDeps.checkout(repo);
-  if (!checkout) return { ok: false, reason: `This machine has no checkout of ${repo}.`, url: null };
+  if (!checkout) return { ok: false, reason: `このマシンには ${repo} のチェックアウトがありません。`, url: null };
 
   const { host } = revertDeps;
   const dir = join(revertDeps.dir, `marshal-factory-revert-${repo.replace("/", "-")}-${number}`);
@@ -74,7 +74,7 @@ export async function revertMerge(prUrl: string, merged: FactoryMerge, failed: r
       await git([...IDENTITY, "revert", "--no-edit", ...target]);
     } catch (error) {
       await git(["revert", "--abort"]).catch(() => "");
-      return { ok: false, reason: `git revert failed: ${firstLine(error)}`, url };
+      return { ok: false, reason: `git revert に失敗しました: ${firstLine(error)}`, url };
     }
     const head = await git(["rev-parse", "HEAD"]);
     const token = await revertDeps.token(repo);
@@ -86,14 +86,14 @@ export async function revertMerge(prUrl: string, merged: FactoryMerge, failed: r
         head: branch,
         base: merged.base,
         body: [
-          `Main went red after the factory merged #${number} (${merged.sha.slice(0, 7)}).`,
-          `Failed checks:\n\n${failed.map((f) => `- ${f}`).join("\n") || "- a check failed"}`,
-          "Reverted by the factory.",
+          `ファクトリーが #${number}（${merged.sha.slice(0, 7)}）をマージした後に main が赤くなりました。`,
+          `失敗したチェック:\n\n${failed.map((f) => `- ${f}`).join("\n") || "- チェックの失敗"}`,
+          "ファクトリーがリバートしました。",
         ].join("\n\n"),
       })
     ).url;
     const result = await mergeRevert(url, head, merged.method, title);
-    if (result.kind !== "merged") return { ok: false, reason: `GitHub didn't merge the revert: ${result.message || result.kind}`, url };
+    if (result.kind !== "merged") return { ok: false, reason: `GitHub がリバートをマージしませんでした: ${result.message || result.kind}`, url };
     return { ok: true, url };
   } catch (error) {
     return { ok: false, reason: firstLine(error), url };

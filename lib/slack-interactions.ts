@@ -34,7 +34,7 @@ import { branchCosts } from "@/lib/spend";
 
 export { MAX_SKEW_SECONDS, NOT_OWNER, verifySignature } from "@/lib/slack-request";
 
-export const ALREADY_RESOLVED = "This is already resolved; nothing was done.";
+export const ALREADY_RESOLVED = "すでに解決済みのため、何もしませんでした。";
 
 /** The owner as the inbox actions check it: the first address in FACTORY_OWNER_EMAILS, which a Slack click by SLACK_OWNER_USER_ID stands for. */
 export function ownerFromAllowlist(allowlist = process.env.FACTORY_OWNER_EMAILS): SessionUser | null {
@@ -86,11 +86,11 @@ const TEXT_ACTION = "text";
 const SLACK_INPUT_MAX = 3000;
 
 const MODAL_TITLES: Record<ModalAction, string> = {
-  answer: "Answer",
-  request_changes: "Request changes",
-  follow_up: "File a follow-up",
-  close: "Close the job",
-  retry: "Retry the job",
+  answer: "回答",
+  request_changes: "修正を依頼",
+  follow_up: "フォローアップを起票",
+  close: "ジョブをクローズ",
+  retry: "ジョブを再試行",
 };
 
 type ModalCopy = { title: string; label: string; hint: string; submit: string; optional: boolean; max: number };
@@ -99,36 +99,36 @@ function modalCopy(action: ModalAction, job: JobRow): ModalCopy {
   const title = MODAL_TITLES[action];
   switch (action) {
     case "answer":
-      return { title, label: "Your answer", hint: "Posted on the issue as your reply; the agent resumes with it.", submit: "Send answer", optional: false, max: MAX_FEEDBACK_CHARS };
+      return { title, label: "回答", hint: "あなたの返信としてイシューに投稿され、エージェントはこの回答をもとに再開します。", submit: "回答を送信", optional: false, max: MAX_FEEDBACK_CHARS };
     case "request_changes":
-      return { title, label: "What should change", hint: "Sent to the agent, which updates the same branch and PR.", submit: "Request changes", optional: false, max: MAX_FEEDBACK_CHARS };
+      return { title, label: "変えてほしいこと", hint: "エージェントに送られ、エージェントは同じブランチと PR を更新します。", submit: "修正を依頼", optional: false, max: MAX_FEEDBACK_CHARS };
     case "follow_up":
       return {
         title,
-        label: "What the fix should do",
-        hint: "Filed as a new issue with the failed checks, the merged PR and why the revert failed; the factory picks it up as a new job.",
-        submit: "File a follow-up",
+        label: "修正でやってほしいこと",
+        hint: "失敗したチェック、マージした PR、リバートが失敗した理由を添えて新しいイシューとして起票し、ファクトリーが新しいジョブとして引き受けます。",
+        submit: "フォローアップを起票",
         optional: false,
         max: MAX_FOLLOW_UP_CHARS,
       };
     case "close":
       return {
         title,
-        label: "Reason (optional)",
+        label: "理由（任意）",
         hint:
           job.stage === "failed"
-            ? "Closes the pull request if it is still open and takes the job out of the inbox."
-            : "Closes the pull request without merging, stops the agent and marks the job failed. Adding the factory label again retries it as a new attempt.",
-        submit: "Close the job",
+            ? "プルリクエストがまだ開いていればクローズし、ジョブを受信箱から外します。"
+            : "プルリクエストをマージせずにクローズし、エージェントを止めてジョブを失敗にします。factory ラベルを付け直すと、新しい試行として再試行します。",
+        submit: "ジョブをクローズ",
         optional: true,
         max: 2000,
       };
     case "retry":
       return {
         title,
-        label: "Note for the next attempt (optional)",
-        hint: "Goes into the new attempt's first message and onto the issue as a comment. Leave it empty to retry as is.",
-        submit: "Retry",
+        label: "次の試行へのメモ（任意）",
+        hint: "新しい試行の最初のメッセージに入り、イシューにもコメントとして投稿されます。空のままにすると、そのまま再試行します。",
+        submit: "再試行",
         optional: true,
         max: MAX_RETRY_NOTE_CHARS,
       };
@@ -147,11 +147,11 @@ export function noteModal(action: ModalAction, text: string) {
     type: "modal",
     callback_id: SLACK_ACTION_IDS[action],
     title: { type: "plain_text", text: MODAL_TITLES[action] },
-    close: { type: "plain_text", text: "Close" },
+    close: { type: "plain_text", text: "閉じる" },
     blocks: [{ type: "section", text: { type: "plain_text", text } }],
   };
 }
-export const LOADING = "Loading…";
+export const LOADING = "読み込んでいます…";
 
 export function renderModal(action: ModalAction, item: Item, facts: MessageFacts, responseUrl: string) {
   const { job, event } = item;
@@ -165,7 +165,7 @@ export function renderModal(action: ModalAction, item: Item, facts: MessageFacts
     private_metadata: JSON.stringify({ event: event.id, responseUrl } satisfies z.infer<typeof metadataSchema>),
     title: { type: "plain_text", text: copy.title },
     submit: { type: "plain_text", text: copy.submit },
-    close: { type: "plain_text", text: "Cancel" },
+    close: { type: "plain_text", text: "キャンセル" },
     blocks: [
       { type: "section", text: { type: "mrkdwn", text: `*${escape(job.key)} · ${escape(clean(job.title))}*\n${escape(clean(event.reason))}` } },
       {
@@ -382,7 +382,7 @@ async function submitted(deps: InteractionDeps, payload: z.infer<typeof viewSubm
   const refuse = (message: string) => Response.json({ response_action: "errors", errors: { [TEXT_BLOCK]: message } });
   if (!owner) return refuse(NOT_OWNER);
   const meta = metadataSchema.safeParse(parseJson(payload.view.private_metadata));
-  if (!meta.success) return refuse("This form can't be read; open it again from the message.");
+  if (!meta.success) return refuse("このフォームを読み取れません。メッセージからもう一度開いてください。");
   const item = await openItem(deps, meta.data.event);
   if (!item) return refuse(ALREADY_RESOLVED);
   const text = payload.view.state.values[TEXT_BLOCK]?.[TEXT_ACTION]?.value ?? "";

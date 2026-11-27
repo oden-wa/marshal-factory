@@ -94,7 +94,7 @@ export async function syncComments(job: Job, decision: MergeDecision): Promise<M
   return { ...decision, comments };
 }
 
-const commitMessage = (job: Job) => [(job.stage_summary ?? parseAssessment(job.merge_assessment)?.interpretation ?? "").slice(0, 1000), "Merged by the factory"].filter(Boolean).join("\n\n");
+const commitMessage = (job: Job) => [(job.stage_summary ?? parseAssessment(job.merge_assessment)?.interpretation ?? "").slice(0, 1000), "ファクトリーがマージしました"].filter(Boolean).join("\n\n");
 
 function mergeSnapshot(decision: MergeDecision, sha: string, method: MergeMethod, via: MergeVia, job: Job) {
   const a = parseAssessment(job.merge_assessment);
@@ -225,4 +225,4 @@ export async function recoverMerges(machineId: string, only: string[] | undefine
 }
 
 /** Merges the factory's own revert PR at the head it pushed; the post-merge watch's way back to green. */
-export const mergeRevert = (url: string, head: string, method: MergeMethod, title: string) => github.mergePull(url, head, { method, title, message: "Reverted by the factory" });
+export const mergeRevert = (url: string, head: string, method: MergeMethod, title: string) => github.mergePull(url, head, { method, title, message: "ファクトリーがリバートしました" });

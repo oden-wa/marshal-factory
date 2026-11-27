@@ -38,17 +38,17 @@ export const forgetVerifications = () => flights.clear();
 
 /** Whether the runner can run the checks at `sha` for this job: may start, running, tried and couldn't, or can't. */
 export function runnerVerification(job: VerifyJob, sha: string, policy: RepoPolicy, previous: MergeDecision | null, now: number): RunnerVerification {
-  if (policy.autonomy !== "auto") return { kind: "unavailable", reason: "the factory runs the checks itself only when the repo merges on its own" };
+  if (policy.autonomy !== "auto") return { kind: "unavailable", reason: "ファクトリーが自分でチェックを実行するのは、リポジトリが自動でマージする設定のときだけです" };
   if (!job.sandbox_id && !job.sandbox_snapshot) {
-    return { kind: "unavailable", reason: job.execution === "modal" ? "the job has no sandbox left to run them in" : "the run isn't in a cloud sandbox, so the factory can't run them itself" };
+    return { kind: "unavailable", reason: job.execution === "modal" ? "ジョブにチェックを実行できるサンドボックスが残っていません" : "クラウドのサンドボックスで実行されていないため、ファクトリーは自分でチェックを実行できません" };
   }
   const flight = flights.get(job.key);
   // A run for an older head still holds the sandbox; this head waits for it to end.
   if (flight && !flight.finished) return { kind: "running" };
-  if (flight?.sha === sha) return { kind: "failed", reason: flight.failed ?? "its run didn't prove the commit" };
+  if (flight?.sha === sha) return { kind: "failed", reason: flight.failed ?? "実行でそのコミットを検証できませんでした" };
   const record = previous?.verification;
   if (record?.sha === sha) {
-    if (record.state === "failed") return { kind: "failed", reason: record.reason ?? "it failed" };
+    if (record.state === "failed") return { kind: "failed", reason: record.reason ?? "実行に失敗しました" };
     if (now - Date.parse(record.at) < VERIFY_RETRY_MS) return { kind: "running" };
   }
   return { kind: "available" };

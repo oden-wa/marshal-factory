@@ -81,7 +81,7 @@ try {
   const first = await inferUntracked(only);
   assert.deepEqual(Array.isArray(first) ? [...first].sort() : first, [`${PR}:pr`, `${MERGED}:merged`, `${DONE}:waiting`, `${FAILED}:failed`].sort(), JSON.stringify(first));
   const pr = await row(PR);
-  assert.deepEqual([pr.stage, pr.pr_url, pr.stage_summary], ["pr", prUrl(1), `Opened ${prUrl(1)}`], "an open PR on the attempt branch moves the job to pr with its URL");
+  assert.deepEqual([pr.stage, pr.pr_url, pr.stage_summary], ["pr", prUrl(1), `プルリクエストを作成しました: ${prUrl(1)}`], "an open PR on the attempt branch moves the job to pr with its URL");
   assert.match(pr.stage_event_id!, /^inferred:/);
   const merged = await row(MERGED);
   assert.deepEqual([merged.stage, merged.pr_url], ["merged", prUrl(2)], "a PR already merged goes straight to merged");
@@ -91,7 +91,7 @@ try {
   assert.equal(done.question, "Done. The token [redacted] did not work, so no PR. Should I use the v2 API?", "with its last message as the question, token masked");
   assert.equal((await row(FRESH)).stage, "triage", "a thread inside the grace may not have started its run yet");
   const failed = await row(FAILED);
-  assert.deepEqual([failed.stage, failed.stage_summary], ["failed", "Watchdog stopped this run: its T3 thread failed (stage implementing)."], "a failed thread fails the job as the watchdog would");
+  assert.deepEqual([failed.stage, failed.stage_summary], ["failed", "ウォッチドッグがこの実行を止めました: T3 スレッドが失敗しました（ステージ implementing）。"], "a failed thread fails the job as the watchdog would");
   assert.match(failed.stage_event_id!, /^watchdog:/);
   assert.equal((await row(TRACKED)).stage, "queued", "a tracked harness reports its own stages");
   assert.ok(!lookedUp.includes(`factory/${TRACKED}`) && !read.includes(`thread-${TRACKED}`), "and is not looked up");

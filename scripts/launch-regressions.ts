@@ -39,7 +39,7 @@ try {
   assert.equal(await claimLaunch(id, "pending:3", slot), true, "a released job can launch again");
   // The binding × stop state space (runner/binding.ts). Each cell checks the predicate, its SQL
   // twin, what deliverStops does, and whether a retry claim may start a new attempt.
-  const stop = { stage: "failed" as const, stage_event_id: `stop:${id}:1:x`, stop_event_id: `stop:${id}:1:x`, stage_summary: "Stopped: test." };
+  const stop = { stage: "failed" as const, stage_event_id: `stop:${id}:1:x`, stop_event_id: `stop:${id}:1:x`, stage_summary: "停止しました: test。" };
   const watchdogFail = { stage: "failed" as const, stage_event_id: `watchdog:${id}:1:x`, stop_event_id: null, stage_summary: "Watchdog." };
   const mergedAfterStop = { stage: "merged" as const, stage_event_id: `merged:${id}:x`, stop_event_id: `stop:${id}:1:x`, stage_summary: "Merged." };
   const cells = [
@@ -128,10 +128,10 @@ try {
   const working = () => db.update(jobs).set({ stage: "implementing", stage_event_id: "e" }).where(eq(jobs.id, jid));
   const cases = [
     { name: "still labeled and open", fetch: async () => [node()], stop: undefined },
-    { name: "label removed", fetch: async () => [node({ labels: { nodes: [{ name: "bug" }] } })], stop: "the factory label was removed in Linear" },
-    { name: "canceled", fetch: async () => [node({ state: { type: "canceled", name: "Canceled" } })], stop: "issue moved to Canceled in Linear" },
-    { name: "archived", fetch: async () => [node({ archivedAt: "2026-10-24T00:00:00Z" })], stop: "the issue was archived or deleted in Linear" },
-    { name: "deleted (not returned)", fetch: async () => [], stop: "the issue was deleted in Linear" },
+    { name: "label removed", fetch: async () => [node({ labels: { nodes: [{ name: "bug" }] } })], stop: "Linear で factory ラベルが外されました" },
+    { name: "canceled", fetch: async () => [node({ state: { type: "canceled", name: "Canceled" } })], stop: "Linear でイシューが Canceled に移動されました" },
+    { name: "archived", fetch: async () => [node({ archivedAt: "2026-10-24T00:00:00Z" })], stop: "Linear でイシューがアーカイブまたは削除されました" },
+    { name: "deleted (not returned)", fetch: async () => [], stop: "Linear でイシューが削除されました" },
   ];
   for (const c of cases) {
     await working();

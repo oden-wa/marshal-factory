@@ -96,20 +96,20 @@ export function inboxReason(item: InboxItem<InboxJob & Pick<JobRow, "question" |
   const { kind, job, decision } = item;
   switch (kind) {
     case "question":
-      return job.question ?? job.stage_summary ?? "The agent is waiting on an answer.";
+      return job.question ?? job.stage_summary ?? "エージェントが回答を待っています。";
     case "revert_failed":
-      return `Main went red after the merge and the revert failed${decision?.watch?.reason ? `: ${decision.watch.reason}` : "."}`;
+      return `マージ後に main が赤くなり、リバートにも失敗しました${decision?.watch?.reason ? `: ${decision.watch.reason}` : "。"}`;
     case "handover":
-      if (decision?.outcome === "merge" && decision.autonomy === "trial") return "Would merge (trial)";
-      return decision?.reasons[0] ?? "Ready for your review";
+      if (decision?.outcome === "merge" && decision.autonomy === "trial") return "マージ可と判断（試行）";
+      return decision?.reasons[0] ?? "レビューをお願いします";
     case "failed": {
       const stop = stopView(job.stop, job.execution === "modal");
-      const summary = job.stage_summary ?? "The job failed.";
+      const summary = job.stage_summary ?? "ジョブが失敗しました。";
       return stop?.kind === "stopping" ? `${stopLine(stop)} · ${summary}` : summary;
     }
     case "stop_unconfirmed": {
       const stop = stopView(job.stop, job.execution === "modal");
-      return stop?.kind === "unconfirmed" ? stop.reason : "The runner could not confirm that the work stopped.";
+      return stop?.kind === "unconfirmed" ? stop.reason : "ランナーは作業の停止を確認できませんでした。";
     }
     default: {
       const never: never = kind;
@@ -206,20 +206,20 @@ export function followUpIssue(job: FollowUpJob, decision: MergeDecision | null, 
   const watch = decision?.watch;
   const base = decision?.merged?.base ?? "main";
   return {
-    title: `Fix ${base}: revert of ${job.key} failed`,
+    title: `${base} の修正: ${job.key} のリバートが失敗`,
     description: [
       body.trim(),
       "",
       "---",
       "",
-      `Main went red after the factory merged ${job.key}${job.pr_url ? ` (${job.pr_url})` : ""}, and the automatic revert failed.`,
+      `ファクトリーが ${job.key}${job.pr_url ? ` (${job.pr_url})` : ""} をマージした後に main が赤くなり、自動リバートも失敗しました。`,
       "",
-      ...(watch && watch.failed.length > 0 ? [`- Failed checks on ${base}: ${watch.failed.join(", ")}`] : []),
-      ...(job.pr_url ? [`- Merged pull request: ${job.pr_url}`] : []),
-      ...(decision?.merged ? [`- Merge commit: ${decision.merged.sha}`] : []),
-      `- Why the revert failed: ${watch?.reason ?? "not recorded"}`,
-      ...(watch?.revertPr ? [`- Revert pull request: ${watch.revertPr}`] : []),
-      `- Original issue: ${job.url}`,
+      ...(watch && watch.failed.length > 0 ? [`- ${base} で失敗したチェック: ${watch.failed.join(", ")}`] : []),
+      ...(job.pr_url ? [`- マージしたプルリクエスト: ${job.pr_url}`] : []),
+      ...(decision?.merged ? [`- マージコミット: ${decision.merged.sha}`] : []),
+      `- リバートが失敗した理由: ${watch?.reason ?? "記録なし"}`,
+      ...(watch?.revertPr ? [`- リバートのプルリクエスト: ${watch.revertPr}`] : []),
+      `- 元のイシュー: ${job.url}`,
     ].join("\n"),
   };
 }
@@ -228,5 +228,5 @@ export function followUpIssue(job: FollowUpJob, decision: MergeDecision | null, 
 export function followUpHint(job: Pick<JobRow, "key">, decision: MergeDecision | null) {
   const failed = decision?.watch?.failed ?? [];
   const base = decision?.merged?.base ?? "main";
-  return `Get ${base} green again after ${job.key}${failed.length > 0 ? `: ${failed.join(", ")} failed` : ""}.`;
+  return `${job.key} のマージ後に ${base} をグリーンに戻す${failed.length > 0 ? `（失敗したチェック: ${failed.join(", ")}）` : ""}。`;
 }

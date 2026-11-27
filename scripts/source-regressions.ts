@@ -77,13 +77,13 @@ const EXPECTED = {
         "comment",
         "src-pr",
         "368968ca-5f44-4b9f-8953-4b89e8bcd24c",
-        "marshal-factory has a pull request ready for review: https://g/pr/1\n\ndone"
+        "marshal-factory がレビュー用のプルリクエストを用意しました: https://g/pr/1\n\ndone"
       ],
       [
         "comment",
         "src-wait",
         "4ac8711f-b5ac-4093-b778-86a8e21f9bab",
-        "marshal-factory stopped and needs an answer before it can continue:\n\nWhich layout?"
+        "marshal-factory は作業を止めています。続けるには回答が必要です:\n\nWhich layout?"
       ],
       [
         "labelsOf",
@@ -111,7 +111,7 @@ const EXPECTED = {
         "comment",
         "src-fail",
         "b1e0641a-e8ae-43b6-a329-344171e78538",
-        "marshal-factory gave up on this issue (attempt 2): boom\n\nAdd the `factory` label again to retry."
+        "marshal-factory はこのイシューを断念しました（2 回目の試行）: boom\n\n再試行するには `factory` ラベルをもう一度付けてください。"
       ],
       [
         "update",
@@ -131,7 +131,7 @@ const EXPECTED = {
         "comment",
         "src-q1",
         "e859071b-d221-4990-bacb-cdf002be4667",
-        "Picked up by marshal-factory."
+        "marshal-factory が引き受けました。"
       ],
       [
         "labelsOf",
@@ -152,7 +152,7 @@ const EXPECTED = {
         "comment",
         "src-q2",
         "fbadf7f5-f936-4d2c-ab88-0d811cc8d183",
-        "Picked up by marshal-factory again (attempt 2, branch factory/SRC-7-a2)."
+        "marshal-factory がもう一度引き受けました（2 回目の試行、ブランチ factory/SRC-7-a2）。"
       ]
     ],
     "rows": [
@@ -376,16 +376,17 @@ try {
   const claim = { claimed, calls: structuredClone(calls), rows: await snapshot() };
 
   calls.length = 0;
-  const stillLabeled = await ops.stopJob(jobId("linear", "src-new"), "the factory label was removed in Linear");
+  const stillLabeled = await ops.stopJob(jobId("linear", "src-new"), "Linear で factory ラベルが外されました");
   const stopCheck = { stillLabeled, calls: structuredClone(calls) };
 
   calls.length = 0;
   const adapter = SOURCES.linear;
   thread = { state: { name: "In Progress", type: "started" }, labels: [] };
-  const unlabeled = await adapter.confirmStop("src-new", "the factory label was removed in Linear");
+  const unlabeled = await adapter.confirmStop("src-new", "Linear で factory ラベルが外されました");
   thread = { state: { name: "Canceled", type: "canceled" }, labels: ["Factory"] };
-  const canceled = await adapter.confirmStop("src-new", "issue moved to Canceled in Linear");
-  const deleted = await adapter.confirmStop("src-new", "the issue was deleted in Linear");
+  const canceled = await adapter.confirmStop("src-new", "Linear でイシューが Canceled に移動されました");
+  const deleted = await adapter.confirmStop("src-new", "Linear でイシューが削除されました");
+  assert.deepEqual(await adapter.confirmStop("src-new", "the issue was deleted in Linear"), deleted, "a stop recorded before the Japanese text still skips the Linear read");
   await adapter.reopen({ writeback: { kind: "linear", issueId: "src-new" } } as never);
   const confirm = { unlabeled, canceled, deleted, calls: structuredClone(calls) };
 

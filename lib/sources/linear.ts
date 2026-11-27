@@ -26,7 +26,9 @@ const LINEAR_MAX_SKEW_MS = 60_000;
 const same = (a: string, b: string) => a.toLowerCase() === b.toLowerCase();
 
 /** The stop detail for a deleted issue; there is nothing left in Linear to double-check. */
-const DELETED = "the issue was deleted in Linear";
+const DELETED = "Linear でイシューが削除されました";
+// Stop intents recorded before the Japanese text shipped still carry the English detail.
+const DELETED_DETAILS = new Set([DELETED, "the issue was deleted in Linear"]);
 
 /** `Linear-Signature` is the hex HMAC-SHA256 of the raw body; the timestamp check comes after it. */
 function verifyLinear(rawBody: string, signature: string | null, secret: string, now = Date.now()): Verdict {
@@ -73,13 +75,13 @@ function linearIntent(body: unknown, opts: { teamKey: string; label: string }): 
 
   if (payload.action === "remove") return { kind: "stop", ...base, detail: DELETED };
   if (issue.state?.type === "canceled" && payload.updatedFrom && "stateId" in payload.updatedFrom) {
-    return { kind: "stop", ...base, detail: `issue moved to ${issue.state.name} in Linear` };
+    return { kind: "stop", ...base, detail: `Linear でイシューが ${issue.state.name} に移動されました` };
   }
   const labelsBefore = z.array(z.string()).optional().parse(payload.updatedFrom?.labelIds);
   if (labelsBefore && !factoryLabel) {
     // The labels changed and factory is not among them now. The payload names only the current
     // labels, so a swap looks the same as a removal; the runner checks whether it was running.
-    return { kind: "stop", ...base, detail: `the ${opts.label} label was removed in Linear` };
+    return { kind: "stop", ...base, detail: `Linear で ${opts.label} ラベルが外されました` };
   }
   if (factoryLabel && issue.state?.type === "unstarted") return { kind: "claim", ...base };
   return null;
@@ -146,10 +148,10 @@ type IssueNode = Awaited<ReturnType<LinearClient["issuesByIds"]>>[number];
 /** Why Linear says a claimed issue should stop, or undefined while it is still the factory's. */
 function stopReason(node: IssueNode | undefined, label: string) {
   if (!node) return DELETED;
-  if (node.trashed || node.archivedAt) return "the issue was archived or deleted in Linear";
-  if (["canceled", "completed"].includes(node.state.type)) return `issue moved to ${node.state.name} in Linear`;
+  if (node.trashed || node.archivedAt) return "Linear でイシューがアーカイブまたは削除されました";
+  if (["canceled", "completed"].includes(node.state.type)) return `Linear でイシューが ${node.state.name} に移動されました`;
   if (!node.labels.nodes.some((l) => l.name.toLowerCase() === label.toLowerCase())) {
-    return `the ${label} label was removed in Linear`;
+    return `Linear で ${label} ラベルが外されました`;
   }
   return undefined;
 }
@@ -196,16 +198,16 @@ const writeBackTable = (factoryLabel: string): Partial<Record<Stage, WriteBack>>
     state: "In Review",
     comment: (i) =>
       [
-        `marshal-factory has a pull request ready for review: ${i.pr_url}`,
+        `marshal-factory がレビュー用のプルリクエストを用意しました: ${i.pr_url}`,
         i.stage_summary ?? "",
-        i.merge_assessment?.assumptions.length ? `**Assumptions I made**\n\n${i.merge_assessment.assumptions.map((a) => `- ${a}`).join("\n")}` : "",
+        i.merge_assessment?.assumptions.length ? `**前提にしたこと**\n\n${i.merge_assessment.assumptions.map((a) => `- ${a}`).join("\n")}` : "",
       ]
         .filter(Boolean)
         .join("\n\n"),
   },
   waiting: {
     comment: (i) =>
-      `marshal-factory stopped and needs an answer before it can continue:\n\n${i.question ?? i.stage_summary}`,
+      `marshal-factory は作業を止めています。続けるには回答が必要です:\n\n${i.question ?? i.stage_summary}`,
   },
   // Back to Todo without the factory label, so the runner does not pick it up again in a loop.
   // Adding the label again retries it as a new attempt.
@@ -213,7 +215,7 @@ const writeBackTable = (factoryLabel: string): Partial<Record<Stage, WriteBack>>
     state: "Todo",
     labels: { add: [FAILED_LABEL], remove: [factoryLabel] },
     comment: (i) =>
-      `marshal-factory gave up on this issue (attempt ${i.attempt}): ${i.stage_summary}\n\nAdd the \`${factoryLabel}\` label again to retry.`,
+      `marshal-factory はこのイシューを断念しました（${i.attempt} 回目の試行）: ${i.stage_summary}\n\n再試行するには \`${factoryLabel}\` ラベルをもう一度付けてください。`,
   },
   merged: { state: "Done" },
 });
@@ -293,8 +295,8 @@ export function createLinearAdapter(load: () => LinearDeps | Promise<LinearDeps>
         job,
         claimCommentId(job.writeback.issueId, job.attempt),
         job.attempt > 1
-          ? `Picked up by marshal-factory again (attempt ${job.attempt}, branch ${attemptBranch(job.key, job.attempt)}).`
-          : "Picked up by marshal-factory.",
+          ? `marshal-factory がもう一度引き受けました（${job.attempt} 回目の試行、ブランチ ${attemptBranch(job.key, job.attempt)}）。`
+          : "marshal-factory が引き受けました。",
       );
       await recordState(d, job, ANNOUNCED, { updated_at: new Date() });
     },
@@ -339,7 +341,7 @@ export function createLinearAdapter(load: () => LinearDeps | Promise<LinearDeps>
     },
 
     async confirmStop(externalId, detail) {
-      if (detail === DELETED) return { stop: true, reopen: false };
+      if (DELETED_DETAILS.has(detail)) return { stop: true, reopen: false };
       const { client, limits } = await deps();
       const { state } = await client.issueWithComments(externalId);
       const stillLabeled = (await client.labelsOf(externalId)).some((l) => l.name.toLowerCase() === limits.label.toLowerCase());
@@ -370,7 +372,7 @@ export function createLinearAdapter(load: () => LinearDeps | Promise<LinearDeps>
     },
 
     async acknowledgeReplies(job, replyIds) {
-      await postComment(await deps(), job, resumeCommentId(job.writeback.issueId, replyIds), "Answer received, resuming.");
+      await postComment(await deps(), job, resumeCommentId(job.writeback.issueId, replyIds), "回答を受け取りました。再開します。");
     },
 
     async syncLabelGroups(groups) {

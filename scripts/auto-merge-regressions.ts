@@ -55,7 +55,7 @@ const base = { reasons: [], evaluatedAt: "2027-01-01T00:00:00.000Z", headSha: "h
 assert.equal(prCommentBody({ ...base, outcome: "pending", autonomy: "auto" }, assessment), null, "pending says nothing");
 assert.equal(prCommentBody({ ...base, outcome: "merge", autonomy: "auto" }, assessment), null, "an auto merge speaks once it merged");
 assert.equal(sourceCommentBody({ ...base, outcome: "handover", autonomy: "off" }, "u"), null, "off says nothing");
-assert.match(prCommentBody({ ...base, outcome: "handover", autonomy: "trial", reasons: ["A check failed."] }, null)!, /Would hand over \(trial\) because:\n\n- A check failed\./);
+assert.match(prCommentBody({ ...base, outcome: "handover", autonomy: "trial", reasons: ["最新のコミットでチェックが失敗しました。"] }, null)!, /引き継ぎと判断（試行）。理由:\n\n- 最新のコミットでチェックが失敗しました。/);
 
 // --- fake GitHub
 type Pull = {
@@ -286,7 +286,7 @@ try {
 
   // Auto + merge: one PUT pinned to the evaluated head, squash, the factory's title and body.
   assert.deepEqual(putsTo(AUTO, 1).map((w) => w.body), [
-    { merge_method: "squash", sha: "h1", commit_title: "Title 1 (#1)", commit_message: "Sorted the list.\n\nMerged by the factory" },
+    { merge_method: "squash", sha: "h1", commit_title: "Title 1 (#1)", commit_message: "Sorted the list.\n\nファクトリーがマージしました" },
   ]);
   assert.equal(putsTo(MERGE_ONLY, 5)[0]!.body.merge_method, "merge", "the first method the repo allows");
   assert.equal((await row(GOOD)).stage, "merged", "the merged flow runs");
@@ -299,10 +299,10 @@ try {
   assert.match(goodAudits[1]!.detail!, /^Merged by the factory as m1 \(squash\) via auto · Interpretation: Sort the list by name\. · Assumptions: Case-insensitive/);
   const goodComments = comments.get(pullKey(AUTO, 1))!;
   assert.equal(goodComments.length, 1);
-  assert.ok(goodComments[0]!.body.startsWith(`${DECISION_MARKER}\n\n✅ Merged by the factory`), goodComments[0]!.body);
-  assert.match(goodComments[0]!.body, /\*\*Assumptions I made\*\*\n\n- Case-insensitive/);
-  assert.match(goodComments[0]!.body, /\*\*Confidence\*\*\n\nConfident it built what the issue asked for/);
-  assert.deepEqual(notesOf(GOOD), [`Merged by the factory: ${prUrl(AUTO, 1)}`]);
+  assert.ok(goodComments[0]!.body.startsWith(`${DECISION_MARKER}\n\n✅ ファクトリーがマージしました`), goodComments[0]!.body);
+  assert.match(goodComments[0]!.body, /\*\*前提にしたこと\*\*\n\n- Case-insensitive/);
+  assert.match(goodComments[0]!.body, /\*\*確信度\*\*\n\nイシューが求めるものを作れていて、動作することに確信があります。/);
+  assert.deepEqual(notesOf(GOOD), [`ファクトリーがマージしました: ${prUrl(AUTO, 1)}`]);
 
   // A push between the decision and the merge aborts it; the next pass merges the new head.
   assert.equal(putsTo(AUTO, 2).length, 0, "stale head: no merge");
@@ -315,14 +315,14 @@ try {
 
   // No permission: one handover with a clear reason, one audit, no retry loop.
   const forbidden = await decision(FORBIDDEN);
-  const reason = "The factory's GitHub App can't merge in this repo: Resource not accessible by integration";
+  const reason = "ファクトリーの GitHub App はこのリポジトリでマージできません: Resource not accessible by integration";
   assert.deepEqual([forbidden.outcome, forbidden.reasons, forbidden.blocked], ["handover", [reason], "Resource not accessible by integration"]);
-  assert.match(comments.get(pullKey(AUTO, 4))![0]!.body, /Ready for your review\n\n- The factory's GitHub App can't merge/);
-  assert.match(comments.get(pullKey(AUTO, 4))![0]!.body, /Notes\*\*\n\nThe sort order/);
+  assert.match(comments.get(pullKey(AUTO, 4))![0]!.body, /レビューをお願いします\n\n- ファクトリーの GitHub App はこのリポジトリでマージできません/);
+  assert.match(comments.get(pullKey(AUTO, 4))![0]!.body, /\*\*補足\*\*\n\nThe sort order/);
 
   // Trial and off never merge; trial comments.
   assert.equal(putsTo(TRIAL, 6).length + putsTo(OFF, 7).length, 0);
-  assert.match(comments.get(pullKey(TRIAL, 6))![0]!.body, /Would merge \(trial\)/);
+  assert.match(comments.get(pullKey(TRIAL, 6))![0]!.body, /マージ可と判断（試行）/);
   assert.equal(comments.get(pullKey(OFF, 7)), undefined, "off posts nothing");
   assert.deepEqual(notesOf(OFFED), []);
 
@@ -341,9 +341,9 @@ try {
   await decideMerges({ only: [TRIALED], now: at(30) });
   const trialComments = comments.get(pullKey(TRIAL, 6))!;
   assert.equal(trialComments.length, 1, "one comment per PR");
-  assert.match(trialComments[0]!.body, /Would hand over \(trial\) because:\n\n- A check failed on the latest commit\./);
+  assert.match(trialComments[0]!.body, /引き継ぎと判断（試行）。理由:\n\n- 最新のコミットでチェックが失敗しました。/);
   assert.equal(writes.filter((w) => w.method === "PATCH").length, 1, "edited, not duplicated");
-  assert.deepEqual(notesOf(TRIALED), [`Would merge (trial): ${prUrl(TRIAL, 6)}`, `Would hand over (trial): ${prUrl(TRIAL, 6)}\n\n- A check failed on the latest commit.`]);
+  assert.deepEqual(notesOf(TRIALED), [`マージ可と判断（試行）: ${prUrl(TRIAL, 6)}`, `引き継ぎと判断（試行）: ${prUrl(TRIAL, 6)}\n\n- 最新のコミットでチェックが失敗しました。`]);
   await decideMerges({ only: [TRIALED], now: at(31) + RECHECK_MS });
   assert.equal(notesOf(TRIALED).length, 2, "an unchanged decision posts nothing");
   assert.equal(writes.filter((w) => w.method === "PATCH" || (w.method === "POST" && w.path.endsWith("/comments"))).length, 7, "six PRs commented, one edit");
@@ -392,8 +392,8 @@ try {
   assert.deepEqual([push.cwd, push.env], [dir, { FACTORY_GIT_TOKEN: TOKEN, GIT_TERMINAL_PROMPT: "0" }], "the token goes in the push's env");
   assert.ok(gitCalls.filter((c) => c !== push).every((c) => !c.env), "and nowhere else");
   assert.ok(!gitCalls.some((c) => c.args.join(" ").includes(TOKEN)), "never in argv");
-  assert.deepEqual(notesOf(MC).at(-1), `Reverted: main went red after merge — build, ci/lint. Revert: ${mc.revertPr}`);
-  assert.match(comments.get(pullKey(MERGE_ONLY, 5))![0]!.body, new RegExp(`Reverted in ${mc.revertPr} after main went red: build, ci/lint\\.`));
+  assert.deepEqual(notesOf(MC).at(-1), `リバートしました: マージ後に main が赤くなりました — build, ci/lint。リバート: ${mc.revertPr}`);
+  assert.match(comments.get(pullKey(MERGE_ONLY, 5))![0]!.body, new RegExp(`main が赤くなった（build, ci/lint）ため、${mc.revertPr} でリバートしました。`));
   assert.match((await auditsOf(MC)).at(-1)!.detail!, /^Reverted after main went red · build, ci\/lint · https:/);
 
   // Pending past the window ends the watch without a verdict.
@@ -405,11 +405,11 @@ try {
   assert.deepEqual(await watchMerges({ only: [STALE], now: at(10) }), [`${STALE}:revert_failed`]);
   const failed = (await decision(STALE)).watch!;
   assert.equal(failed.state, "revert_failed");
-  assert.match(failed.reason!, /^git revert failed: Command failed/);
+  assert.match(failed.reason!, /^git revert に失敗しました: Command failed/);
   assert.ok(gitCalls.some((c) => c.args.join(" ") === "revert --abort"), "the revert is aborted");
   assert.ok(gitCalls.some((c) => c.args[0] === "worktree" && c.args[1] === "remove"), "and the worktree removed");
   assert.ok(!gitCalls.some((c) => c.args.includes("push")), "nothing is pushed");
-  assert.match(notesOf(STALE).at(-1)!, /^Main went red after the factory merged .* — build\. The revert failed, so revert it by hand: git revert failed/);
+  assert.match(notesOf(STALE).at(-1)!, /^ファクトリーが .* をマージした後に main が赤くなりました — build。リバートに失敗したため、手動でリバートしてください: git revert に失敗しました/);
   gitCalls.length = 0;
   assert.deepEqual(await watchMerges({ only: [STALE, MC, GOOD], now: at(12) }), [], "an ended watch is not watched again");
   assert.equal(gitCalls.length, 0);
@@ -431,7 +431,7 @@ try {
   assert.deepEqual([human.merged, human.watch, human.merging], [undefined, undefined, undefined], "someone else's merge is not the factory's");
   assert.deepEqual(await decideMerges({ only: [CRASH, HUMAN], now: at(42) }), [], "recorded once");
   assert.equal((await auditsOf(CRASH)).filter((a) => a.action === "merge_succeeded").length, 1);
-  assert.match(comments.get(pullKey(AUTO, 8))!.at(-1)!.body, /Merged by the factory/);
+  assert.match(comments.get(pullKey(AUTO, 8))!.at(-1)!.body, /ファクトリーがマージしました/);
   checksOf.set("m8", { runs: [checkRun("ci", "success")], statuses: [] });
   assert.deepEqual(await watchMerges({ only: [CRASH], now: at(43) }), [`${CRASH}:green`], "and watched at stage merged");
 

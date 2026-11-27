@@ -151,18 +151,18 @@ const scripts = (over: Record<string, string> = {}) => ({ test: "vitest", lint: 
 const recipeChecks = [{ name: "test" as const, command: "bun run test" }];
 const edits = (files: string[], base: Record<string, string> | null = scripts(), head: Record<string, string> | null = scripts(), required: typeof recipeChecks | null = recipeChecks) => trustedEdits({ files, required, base, head });
 assert.deepEqual(edits(["src/a.ts"]), [], "an ordinary change");
-assert.match(edits([".factory/setup.json"])[0]!, /edits the recipe the factory trusts: \.factory\/setup\.json/, "the recipe");
-assert.match(edits([".github/workflows/ci.yml"])[0]!, /edits CI workflows \(\.github\/workflows\/ci\.yml\)/, "a workflow");
-assert.deepEqual(edits(["package.json"], scripts(), scripts({ test: "true" })), ["The pull request edits the check scripts the factory trusts: package.json scripts.test."], "the script a check runs");
+assert.match(edits([".factory/setup.json"])[0]!, /プルリクエストがファクトリーの信頼するレシピを編集しています: \.factory\/setup\.json。/, "the recipe");
+assert.match(edits([".github/workflows/ci.yml"])[0]!, /プルリクエストが CI ワークフロー（\.github\/workflows\/ci\.yml）を編集しています。/, "a workflow");
+assert.deepEqual(edits(["package.json"], scripts(), scripts({ test: "true" })), ["プルリクエストがファクトリーの信頼するチェックスクリプトを編集しています: package.json scripts.test。"], "the script a check runs");
 assert.deepEqual(edits(["package.json"], scripts(), scripts({ dev: "vite" })), [], "a script no check uses");
 assert.deepEqual(edits(["package.json"]), [], "a package.json change outside scripts, such as dependencies");
 const chained = { test: "bun run unit", unit: "vitest" };
-assert.match(edits(["package.json"], scripts(chained), scripts({ ...chained, unit: "true" }))[0]!, /scripts\.unit\./, "a script the used script calls counts");
-assert.match(edits(["package.json"], scripts(), scripts({ lint: "true" }), null)[0]!, /scripts\.lint\./, "without a recipe the scripts named like the checks count");
-assert.match(edits(["package.json"], scripts(), null)[0]!, /couldn't be compared/, "an unreadable head is a handover, not a pass");
+assert.match(edits(["package.json"], scripts(chained), scripts({ ...chained, unit: "true" }))[0]!, /scripts\.unit。/, "a script the used script calls counts");
+assert.match(edits(["package.json"], scripts(), scripts({ lint: "true" }), null)[0]!, /scripts\.lint。/, "without a recipe the scripts named like the checks count");
+assert.match(edits(["package.json"], scripts(), null)[0]!, /ベースブランチのものと比較できませんでした/, "an unreadable head is a handover, not a pass");
 const noBuild = { test: "vitest" };
-assert.match(edits(["package.json"], noBuild, { ...noBuild, build: "true" }, null)[0]!, /scripts\.build\./, "without a recipe, a check script the head adds counts");
-assert.match(edits(["package.json"], scripts(chained), scripts({ ...chained, test: "bun run unit && bun run extra", extra: "true" }))[0]!, /scripts\.extra, package\.json scripts\.test\./, "a script the head adds and a used script calls counts");
+assert.match(edits(["package.json"], noBuild, { ...noBuild, build: "true" }, null)[0]!, /scripts\.build。/, "without a recipe, a check script the head adds counts");
+assert.match(edits(["package.json"], scripts(chained), scripts({ ...chained, test: "bun run unit && bun run extra", extra: "true" }))[0]!, /scripts\.extra, package\.json scripts\.test。/, "a script the head adds and a used script calls counts");
 
 const summary = (over: Record<string, unknown> = {}) => parseSummary({ sha: SHA_A, attempt: 1, clean: true, producer: "agent", source: "package", at: at(0).toISOString(), checks: [{ name: "test", passed: true, exitCode: 0, durationMs: 1 }, { name: "lint", passed: true, exitCode: 0, durationMs: 1 }], ...over });
 assert.deepEqual(evidenceLine(summary(), SHA_A, { expected: true }), { text: "Verified at aaaaaaa · 2/2 checks", tone: "success" });
@@ -402,12 +402,12 @@ try {
   assert.ok(Array.isArray(first), JSON.stringify(first));
   for (const k of [RUNNER, ASLEEP, BROKEN, GONE]) {
     const d = await decisionOf(k);
-    assert.deepEqual([d.outcome, d.reasons, d.evidence], ["pending", [`Waiting for verification at ${heads.get(k)!.slice(0, 7)}.`], { state: "missing" }], `${k} waits for the runner`);
+    assert.deepEqual([d.outcome, d.reasons, d.evidence], ["pending", [`待機中: ${heads.get(k)!.slice(0, 7)} での検証`], { state: "missing" }], `${k} waits for the runner`);
     // Runs that finish fast free their slot within the pass; the rest start on a later one.
     if (d.verification) assert.deepEqual([d.verification.state, d.verification.sha], ["running", heads.get(k)]);
   }
-  assert.match((await decisionOf(LOCAL)).reasons.join(" "), /Not verified at fffffff: no checks were reported for it; the run isn't in a cloud sandbox/, "a local job can't be verified by the runner");
-  assert.match((await decisionOf(TRIAL)).reasons.join(" "), /only when the repo merges on its own/, "trial never runs the checks itself");
+  assert.match((await decisionOf(LOCAL)).reasons.join(" "), /fffffff では未検証です（チェックの報告がありません）。クラウドのサンドボックスで実行されていないため/, "a local job can't be verified by the runner");
+  assert.match((await decisionOf(TRIAL)).reasons.join(" "), /リポジトリが自動でマージする設定のときだけです/, "trial never runs the checks itself");
   assert.equal((await decisionOf(TRIAL)).verification, undefined);
 
   // More passes until every head was verified, or tried.
@@ -429,9 +429,9 @@ try {
   assert.ok(Array.isArray(second), JSON.stringify(second));
   const verified = await decisionOf(RUNNER);
   assert.deepEqual([verified.outcome, verified.evidence], ["merge", { state: "verified", sha: heads.get(RUNNER), passed: 3, total: 3, producer: "runner" }], "with the runner's evidence it merges");
-  assert.deepEqual((await decisionOf(ASLEEP)).reasons, [`Checks failed at ${heads.get(ASLEEP)!.slice(0, 7)}: lint.`], "the runner's failing evidence hands over");
-  assert.match((await decisionOf(BROKEN)).reasons.join(" "), /couldn't run the checks itself: commit ddddddd isn't on factory\//, "a head the branch doesn't have");
-  assert.match((await decisionOf(GONE)).reasons.join(" "), /couldn't run the checks itself/, "a sandbox that can't run anything");
+  assert.deepEqual((await decisionOf(ASLEEP)).reasons, [`${heads.get(ASLEEP)!.slice(0, 7)} でチェックが失敗しました: lint。`], "the runner's failing evidence hands over");
+  assert.match((await decisionOf(BROKEN)).reasons.join(" "), /ファクトリー自身もチェックを実行できませんでした: commit ddddddd isn't on factory\//, "a head the branch doesn't have");
+  assert.match((await decisionOf(GONE)).reasons.join(" "), /ファクトリー自身もチェックを実行できませんでした/, "a sandbox that can't run anything");
   assert.equal((await decisionOf(BROKEN)).verification?.state, "failed", "the failure is kept, so it is not retried for this head");
   forgetVerifications();
   await decideMerges({ only: [BROKEN], now: Date.now() + 60 * 60_000 });

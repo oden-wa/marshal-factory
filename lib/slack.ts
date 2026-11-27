@@ -1,6 +1,6 @@
 import type { JobRow } from "../db/schema";
 import { harnessLabel } from "./harness";
-import { INBOX_ACTIONS, INBOX_KINDS, INBOX_LABELS, inboxItems, inboxReason, isDismissed, type InboxAction, type InboxJob, type InboxKind } from "./inbox";
+import { INBOX_ACTIONS, INBOX_KINDS, inboxItems, inboxReason, isDismissed, type InboxAction, type InboxJob, type InboxKind } from "./inbox";
 import { mergeDecisionSchema, type MergeDecision } from "./merge-decision";
 import { sourceLink } from "./sources/shapes";
 import { isStopPending, parseStop, stopNeedsOwner } from "./stop";
@@ -61,7 +61,15 @@ const EMOJI: Record<NotifyKind, string> = {
   reverted: "↩️",
 };
 
-const LABELS: Record<NotifyKind, string> = { ...INBOX_LABELS, merged: "Merged by the factory", reverted: "Reverted by the factory" };
+const LABELS: Record<NotifyKind, string> = {
+  question: "質問",
+  revert_failed: "リバート失敗",
+  handover: "レビュー待ち",
+  failed: "失敗",
+  stop_unconfirmed: "停止を確認できず",
+  merged: "ファクトリーがマージ",
+  reverted: "ファクトリーがリバート",
+};
 
 /** An event older than this when the notifier first sees it is not posted: it is in the panel, and Slack is for what is new. */
 export const NOTIFY_WINDOW_MS = 24 * 3_600_000;
@@ -85,28 +93,28 @@ export const SLACK_ACTION_IDS = {
 export const slackAction = (actionId: string): InboxAction | null =>
   (Object.entries(SLACK_ACTION_IDS).find(([, id]) => id === actionId)?.[0] as InboxAction | undefined) ?? null;
 
-/** The button each inbox action gets; the panel's labels. */
+/** The button each inbox action gets. */
 export const ACTION_LABELS: Record<InboxAction, string> = {
-  answer: "Answer",
-  approve: "Approve and merge",
-  request_changes: "Request changes",
-  follow_up: "File a follow-up",
-  close: "Close",
-  dismiss: "Dismiss",
-  retry_stop: "Retry stop",
-  retry: "Retry",
+  answer: "回答する",
+  approve: "承認してマージする",
+  request_changes: "修正を依頼する",
+  follow_up: "フォローアップを起票する",
+  close: "クローズする",
+  dismiss: "見送る",
+  retry_stop: "停止を再試行する",
+  retry: "再試行する",
 };
 
 /** What the message says between the click and the notifier's resolution; it has no action buttons, so a second click finds none. */
 export const PENDING_LABELS: Record<InboxAction, string> = {
-  answer: "Answer sent",
-  approve: "⏳ Merging…",
-  request_changes: "⏳ Sending your changes…",
-  follow_up: "⏳ Filing a follow-up…",
-  close: "⏳ Closing…",
-  dismiss: "Dismissed",
-  retry_stop: "⏳ Interrupting again…",
-  retry: "⏳ Retrying…",
+  answer: "回答を送信しました",
+  approve: "⏳ マージしています…",
+  request_changes: "⏳ 修正依頼を送っています…",
+  follow_up: "⏳ フォローアップを起票しています…",
+  close: "⏳ クローズしています…",
+  dismiss: "見送りました",
+  retry_stop: "⏳ もう一度中断しています…",
+  retry: "⏳ 再試行しています…",
 };
 
 const isInboxKind = (kind: NotifyKind): kind is InboxKind => (INBOX_KINDS as readonly string[]).includes(kind);
@@ -160,7 +168,7 @@ export function notifyEvents<J extends NotifyJob>(jobs: readonly J[]): NotifyEve
         kind: "merged",
         job,
         at: new Date(merged.at),
-        reason: `Merged into ${merged.base} as ${merged.sha.slice(0, 7)}.`,
+        reason: `${merged.base} に ${merged.sha.slice(0, 7)} としてマージしました。`,
         open: false,
       });
     }
@@ -171,7 +179,7 @@ export function notifyEvents<J extends NotifyJob>(jobs: readonly J[]): NotifyEve
         kind: "reverted",
         job,
         at: new Date(merged.at),
-        reason: `${merged.base} went red after the merge${watch.failed.length > 0 ? ` (${watch.failed.join(", ")})` : ""}, so the factory reverted it.`,
+        reason: `マージ後に ${merged.base} が赤くなった${watch.failed.length > 0 ? `（${watch.failed.join(", ")}）` : ""}ため、ファクトリーがリバートしました。`,
         open: false,
       });
     }
@@ -181,32 +189,32 @@ export function notifyEvents<J extends NotifyJob>(jobs: readonly J[]): NotifyEve
 
 /** What a resolved message says happened, from the job as it is now; undefined when the job is gone. */
 export function resolution(kind: NotifyKind, job: NotifyJob | undefined): string {
-  if (!job) return "Resolved";
+  if (!job) return "解決済み";
   const decision = parseDecision(job.merge_decision);
   const closed = job.stage === "failed" && isDismissed(job);
   switch (kind) {
     case "question":
-      if (job.stage === "failed") return closed ? "Closed" : "❌ Failed";
-      return job.answered_at && job.stage_at && job.answered_at >= job.stage_at ? "✅ Answered" : "Moved on";
+      if (job.stage === "failed") return closed ? "クローズ済み" : "❌ 失敗";
+      return job.answered_at && job.stage_at && job.answered_at >= job.stage_at ? "✅ 回答済み" : "次の段階に進みました";
     case "handover":
-      if (decision?.merged) return "✅ Merged by the factory";
-      if (job.stage === "merged") return "✅ Merged";
-      if (decision?.merging) return "✅ Approved, merging";
-      if (job.stage === "failed") return closed ? "Closed" : "❌ Failed";
-      if (job.stage === "pr") return "Back with the factory";
-      return "↩️ Changes requested";
+      if (decision?.merged) return "✅ ファクトリーがマージ";
+      if (job.stage === "merged") return "✅ マージ済み";
+      if (decision?.merging) return "✅ 承認済み、マージ中";
+      if (job.stage === "failed") return closed ? "クローズ済み" : "❌ 失敗";
+      if (job.stage === "pr") return "ファクトリーに戻りました";
+      return "↩️ 修正を依頼済み";
     case "failed":
-      if (job.stage !== "failed") return "🔁 Retried";
-      return isDismissed(job) ? "Dismissed" : "Moved on";
+      if (job.stage !== "failed") return "🔁 再試行済み";
+      return isDismissed(job) ? "見送り済み" : "次の段階に進みました";
     case "revert_failed":
-      return isDismissed(job) ? "Dismissed" : "Resolved";
+      return isDismissed(job) ? "見送り済み" : "解決済み";
     case "stop_unconfirmed": {
-      if (stopNeedsOwner(job.stop, job.dismissed_at)) return "Resolved";
+      if (stopNeedsOwner(job.stop, job.dismissed_at)) return "解決済み";
       const stop = parseStop(job.stop);
-      if (stop?.state === "confirmed") return "✅ Stop confirmed";
+      if (stop?.state === "confirmed") return "✅ 停止を確認";
       // A retry that ends unconfirmed again is a new event, with its own message.
-      if (isStopPending(stop)) return "🔁 Retrying stop";
-      return job.dismissed_at ? "Dismissed" : "Resolved";
+      if (isStopPending(stop)) return "🔁 停止を再試行中";
+      return job.dismissed_at ? "見送り済み" : "解決済み";
     }
     case "merged":
     case "reverted":
@@ -280,13 +288,13 @@ function actionButton(action: InboxAction, job: NotifyJob): ActionButton {
     ...button,
     style: "primary",
     confirm: {
-      title: { type: "plain_text", text: "Approve and merge?" },
+      title: { type: "plain_text", text: "承認してマージしますか？" },
       text: {
         type: "mrkdwn",
-        text: clip(`The factory merges ${escape(job.key)} into ${escape(job.repo)} the way it merges on its own, then watches main. A newer push, a red or running check, a conflict, or GitHub refusing the merge still stops it.`, TEXT_MAX),
+        text: clip(`ファクトリーが自動マージと同じ手順で ${escape(job.key)} を ${escape(job.repo)} にマージし、その後 main を見守ります。新しい push、失敗中または実行中のチェック、コンフリクト、GitHub によるマージ拒否のいずれかがあれば、マージは止まります。`, TEXT_MAX),
       },
-      confirm: { type: "plain_text", text: "Approve and merge" },
-      deny: { type: "plain_text", text: "Cancel" },
+      confirm: { type: "plain_text", text: "承認してマージする" },
+      deny: { type: "plain_text", text: "キャンセル" },
     },
   };
 }
@@ -311,10 +319,10 @@ export function renderMessage(
   const meta = [job.repo, ...(job.provider ? [harnessLabel(job.provider)] : []), ...(facts.spend ? [usd(facts.spend)] : [])];
   const source = sourceLink(job);
   const links: LinkButton[] = [
-    { type: "button", text: { type: "plain_text", text: "Open in panel" }, url: `${facts.panelUrl}/inbox?job=${encodeURIComponent(job.key)}`, action_id: SLACK_LINK_ACTION_IDS.panel },
-    ...(job.pr_url ? [{ type: "button" as const, text: { type: "plain_text" as const, text: "Pull request" }, url: job.pr_url, action_id: SLACK_LINK_ACTION_IDS.pr }] : []),
+    { type: "button", text: { type: "plain_text", text: "パネルで開く" }, url: `${facts.panelUrl}/inbox?job=${encodeURIComponent(job.key)}`, action_id: SLACK_LINK_ACTION_IDS.panel },
+    ...(job.pr_url ? [{ type: "button" as const, text: { type: "plain_text" as const, text: "プルリクエスト" }, url: job.pr_url, action_id: SLACK_LINK_ACTION_IDS.pr }] : []),
     ...(/^https?:\/\//.test(source.href)
-      ? [{ type: "button" as const, text: { type: "plain_text" as const, text: `${source.label} issue` }, url: source.href, action_id: SLACK_LINK_ACTION_IDS.source }]
+      ? [{ type: "button" as const, text: { type: "plain_text" as const, text: `${source.label} のイシュー` }, url: source.href, action_id: SLACK_LINK_ACTION_IDS.source }]
       : []),
   ];
   return {
@@ -330,6 +338,6 @@ export function renderMessage(
 
 /** The message Settings' "Send test message" posts. */
 export function renderTest(actor: string): SlackMessage {
-  const text = `👋 Test from the marshal factory, sent by ${actor}. Notifications reach this conversation.`;
+  const text = `👋 Marshal Factory からのテストメッセージです（送信者: ${actor}）。通知はこの会話に届きます。`;
   return { text, blocks: [{ type: "section", text: { type: "mrkdwn", text: escape(text) } }] };
 }

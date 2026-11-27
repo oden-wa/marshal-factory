@@ -51,15 +51,15 @@ export function usedScripts(commands: readonly string[], ...versions: readonly S
  */
 export function trustedEdits({ files, required, base, head }: { files: readonly string[]; required: readonly PlannedCheck[] | null; base: Scripts | null; head: Scripts | null }): string[] {
   const reasons: string[] = [];
-  if (files.includes(RECIPE_PATH)) reasons.push(`The pull request edits the recipe the factory trusts: ${RECIPE_PATH}.`);
+  if (files.includes(RECIPE_PATH)) reasons.push(`プルリクエストがファクトリーの信頼するレシピを編集しています: ${RECIPE_PATH}。`);
   const workflows = files.filter((file) => matchesAny(file, WORKFLOWS));
-  if (workflows.length > 0) reasons.push(`The pull request edits CI workflows (${workflows.slice(0, 3).join(", ")}${workflows.length > 3 ? ` and ${workflows.length - 3} more` : ""}).`);
+  if (workflows.length > 0) reasons.push(`プルリクエストが CI ワークフロー（${workflows.slice(0, 3).join(", ")}${workflows.length > 3 ? `、ほか ${workflows.length - 3} 件` : ""}）を編集しています。`);
   if (files.includes(PACKAGE_JSON)) {
-    if (!base || !head) reasons.push("The pull request edits package.json, and its scripts couldn't be compared with the base branch's.");
+    if (!base || !head) reasons.push("プルリクエストが package.json を編集していますが、その scripts をベースブランチのものと比較できませんでした。");
     else {
       const commands = required ? required.map((c) => c.command) : CHECKS.map((name) => `bun run ${name}`);
       const changed = usedScripts(commands, base, head).filter((name) => base[name] !== head[name]);
-      if (changed.length > 0) reasons.push(`The pull request edits the check scripts the factory trusts: ${changed.map((name) => `package.json scripts.${name}`).join(", ")}.`);
+      if (changed.length > 0) reasons.push(`プルリクエストがファクトリーの信頼するチェックスクリプトを編集しています: ${changed.map((name) => `package.json scripts.${name}`).join(", ")}。`);
     }
   }
   return reasons;

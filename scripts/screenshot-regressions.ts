@@ -158,11 +158,11 @@ try {
     trustEdits: [],
     ...over,
   });
-  assert.deepEqual(decideMerge(input()), { outcome: "handover", reasons: ["The pull request changes UI files (src/list.tsx), but the agent attached no screenshots."] }, "a UI change without screenshots hands over");
+  assert.deepEqual(decideMerge(input()), { outcome: "handover", reasons: ["プルリクエストが UI ファイル（src/list.tsx）を変更していますが、エージェントはスクリーンショットを添付していません。"] }, "a UI change without screenshots hands over");
   assert.deepEqual(decideMerge(input({ assessment: assessment({ screenshots: shots }) })), { outcome: "merge", reasons: [] }, "with screenshots it merges");
   assert.deepEqual(decideMerge(input({ browser: false })), { outcome: "merge", reasons: [] }, "a run with no browser can't take them, so it isn't held to them");
   const many = ["a.tsx", "b.css", "c.vue", "d.html", "e.ts"].map((path) => ({ path, additions: 1, deletions: 0 }));
-  assert.match(decideMerge(input({ pr: { ...input().pr!, files: many } })).reasons[0]!, /\(a\.tsx, b\.css, c\.vue and 1 more\)/, "names three and counts the rest");
+  assert.match(decideMerge(input({ pr: { ...input().pr!, files: many } })).reasons[0]!, /（a\.tsx, b\.css, c\.vue、ほか 1 件）/, "names three and counts the rest");
   assert.deepEqual(decideMerge(input({ pr: { ...input().pr!, files: [{ path: "lib/sort.ts", additions: 3, deletions: 1 }] } })), { outcome: "merge", reasons: [] }, "a change no page shows needs none");
   assert.deepEqual(uiFiles(["app/page.tsx", "styles/site.scss", "README.md", "lib/a.ts"]), ["app/page.tsx", "styles/site.scss"]);
 

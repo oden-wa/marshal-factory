@@ -102,7 +102,7 @@ const input = (over: Partial<DecisionInput> = {}): DecisionInput => ({
   headSeenAt: NOW - 60_000,
   now: NOW,
   evidence: { state: "verified", sha: "h1", passed: 4, total: 4, producer: "agent" },
-  runner: { kind: "unavailable", reason: "the run isn't in a cloud sandbox, so the factory can't run them itself" },
+  runner: { kind: "unavailable", reason: "クラウドのサンドボックスで実行されていないため、ファクトリーは自分でチェックを実行できません" },
   browser: false,
   trustEdits: [],
   ...over,
@@ -117,10 +117,10 @@ assert.deepEqual(decideMerge(input()), { outcome: "merge", reasons: [] }, "trial
 assert.deepEqual(decideMerge(input({ policy: { ...DEFAULT_POLICY, autonomy: "auto" } })), { outcome: "merge", reasons: [] }, "auto merges with no caveat");
 assert.deepEqual(decideMerge(input({ policy: DEFAULT_POLICY, pr: null })), { outcome: "handover", reasons: [] }, "off evaluates nothing");
 assert.throws(() => decideMerge(input({ pr: null })), /needs the PR's facts/);
-assert.deepEqual(decideMerge(input({ assessment: null })), { outcome: "handover", reasons: ["The agent didn't report an assessment."] }, "a run with no assessment");
+assert.deepEqual(decideMerge(input({ assessment: null })), { outcome: "handover", reasons: ["エージェントが評価を報告しませんでした。"] }, "a run with no assessment");
 assert.deepEqual(
   decideMerge(input({ assessment: unsure("I assumed the list sorts by display name.") })),
-  { outcome: "handover", reasons: ["The agent isn't confident: I assumed the list sorts by display name."] },
+  { outcome: "handover", reasons: ["エージェントに確信がありません: I assumed the list sorts by display name."] },
   "the agent hands over only when it isn't confident, and says why",
 );
 assert.deepEqual(
@@ -135,13 +135,13 @@ assert.deepEqual(
 );
 assert.deepEqual(
   decideMerge(input({ assessment: parseAssessment(legacy({ recommendation: "handover", checks: { ...legacy().checks, proven: { ok: false, note: "No test covers it." } } })) })).reasons,
-  ["The agent isn't confident: Proven: No test covers it."],
+  ["エージェントに確信がありません: Proven: No test covers it."],
   "an old handover names its failed check",
 );
-handsOver({ labels: ["factory", "Review"] }, /"review" label/, "the review label forces a handover");
-handsOver({ pr: facts({ checks: "failure" }) }, /check failed/, "a failed check");
-handsOver({ pr: facts({ mergeable: "conflicting" }) }, /conflicts/, "a conflict");
-handsOver({ pr: facts({ bugbot: { review: { state: "reviewed" }, findings: [{ severity: "medium", resolved: false }] } }) }, /1 unresolved medium or high finding/, "an open Bugbot finding");
+handsOver({ labels: ["factory", "Review"] }, /"review" ラベル/, "the review label forces a handover");
+handsOver({ pr: facts({ checks: "failure" }) }, /チェックが失敗しました/, "a failed check");
+handsOver({ pr: facts({ mergeable: "conflicting" }) }, /コンフリクト/, "a conflict");
+handsOver({ pr: facts({ bugbot: { review: { state: "reviewed" }, findings: [{ severity: "medium", resolved: false }] } }) }, /未解決の medium または high の指摘が 1 件あります/, "an open Bugbot finding");
 assert.equal(decideMerge(input({ pr: facts({ bugbot: { review: { state: "reviewed" }, findings: [{ severity: "high", resolved: true }, { severity: "low", resolved: false }] } }) })).outcome, "merge", "resolved and low findings pass");
 // Size, retries, a branch behind its base, migrations and major bumps are the agent's and GitHub's to judge, not hard limits.
 const mergesAlone = (pr: PrFacts, why: string) => assert.deepEqual(decideMerge(input({ pr })), { outcome: "merge", reasons: [] }, why);
@@ -150,61 +150,61 @@ mergesAlone(facts({ files: [{ path: "drizzle/0001.sql", additions: 1, deletions:
 mergesAlone(facts({ files: [{ path: "package.json", additions: 1, deletions: 1 }] }), "a manifest whose diff bumps a major version");
 
 const pending = decideMerge(input({ pr: facts({ checks: "pending", bugbot: { review: { state: "pending" }, findings: [] } }) }));
-assert.deepEqual(pending, { outcome: "pending", reasons: ["Waiting for checks, Bugbot."] }, "running checks are pending, not a handover");
+assert.deepEqual(pending, { outcome: "pending", reasons: ["待機中: チェック、Bugbot"] }, "running checks are pending, not a handover");
 assert.equal(decideMerge(input({ pr: facts({ mergeable: "unknown" }) })).outcome, "pending", "so is GitHub computing mergeability");
-handsOver({ pr: facts({ checks: "pending" }), headSeenAt: NOW - 61 * 60_000 }, /^Checks didn't finish within 60 minutes\.$/, "pending past the timeout");
-handsOver({ pr: facts({ checks: "pending", mergeable: "conflicting" }) }, /conflicts/, "a hard failure does not wait for checks");
+handsOver({ pr: facts({ checks: "pending" }), headSeenAt: NOW - 61 * 60_000 }, /^60 分以内に終わりませんでした: チェック$/, "pending past the timeout");
+handsOver({ pr: facts({ checks: "pending", mergeable: "conflicting" }) }, /コンフリクト/, "a hard failure does not wait for checks");
 
 // --- verified at head
 const auto = { policy: { ...DEFAULT_POLICY, autonomy: "auto" as const } };
-handsOver({ evidence: { state: "no_checks" } }, /^No checks defined for this repo\.$/, "a repo with no checks never merges on its own");
-handsOver({ evidence: { state: "failed", sha: "h1", failed: ["test", "build"], passed: 2, total: 4 } }, /^Checks failed at h1: test, build\.$/, "a failed check at the head");
-handsOver({ evidence: { state: "missing" } }, /^Not verified at h1: no checks were reported for it; the run isn't in a cloud sandbox/, "no evidence and nobody to verify");
-handsOver({ evidence: { state: "stale", sha: "h0" } }, /^Not verified at h1: the latest checks ran at h0;/, "evidence for an older commit");
-handsOver({ evidence: { state: "dirty", sha: "h1" } }, /uncommitted changes/, "a dirty tree proves nothing");
-handsOver({ evidence: { state: "incomplete", sha: "h1", missing: ["build"] } }, /didn't include build/, "a required check that didn't run");
-handsOver({ evidence: { state: "untrusted", sha: "h1", mismatched: ["test"] } }, /^Not verified at h1: the checks ran other commands than the recipe records for test; /, "checks that ran other commands than the recipe's");
+handsOver({ evidence: { state: "no_checks" } }, /^このリポジトリにはチェックが定義されていません。$/, "a repo with no checks never merges on its own");
+handsOver({ evidence: { state: "failed", sha: "h1", failed: ["test", "build"], passed: 2, total: 4 } }, /^h1 でチェックが失敗しました: test, build。$/, "a failed check at the head");
+handsOver({ evidence: { state: "missing" } }, /^h1 では未検証です（チェックの報告がありません）。クラウドのサンドボックスで実行されていないため/, "no evidence and nobody to verify");
+handsOver({ evidence: { state: "stale", sha: "h0" } }, /^h1 では未検証です（最新のチェックは h0 で実行されたものです）。/, "evidence for an older commit");
+handsOver({ evidence: { state: "dirty", sha: "h1" } }, /コミットされていない変更/, "a dirty tree proves nothing");
+handsOver({ evidence: { state: "incomplete", sha: "h1", missing: ["build"] } }, /チェックに build が含まれていません/, "a required check that didn't run");
+handsOver({ evidence: { state: "untrusted", sha: "h1", mismatched: ["test"] } }, /^h1 では未検証です（test のチェックが、レシピに記録されたものと違うコマンドで実行されました）。/, "checks that ran other commands than the recipe's");
 assert.deepEqual(
   decideMerge(input({ ...auto, evidence: { state: "untrusted", sha: "h1", mismatched: ["test"] }, runner: { kind: "available" } })),
-  { outcome: "pending", reasons: ["Waiting for verification at h1."], verify: true },
+  { outcome: "pending", reasons: ["待機中: h1 での検証"], verify: true },
   "untrusted evidence under auto waits for the runner to run the recorded commands",
 );
-handsOver({ ...auto, evidence: { state: "untrusted", sha: "h1", mismatched: ["test"] }, runner: { kind: "failed", reason: "its run didn't prove the commit" } }, /the factory couldn't run the checks itself/, "untrusted evidence the runner couldn't settle");
-handsOver({ trustEdits: ["The pull request edits the recipe the factory trusts: .factory/setup.json."] }, /edits the recipe the factory trusts/, "a PR that edits what its checks run hands over despite verified evidence");
+handsOver({ ...auto, evidence: { state: "untrusted", sha: "h1", mismatched: ["test"] }, runner: { kind: "failed", reason: "実行でそのコミットを検証できませんでした" } }, /ファクトリー自身もチェックを実行できませんでした/, "untrusted evidence the runner couldn't settle");
+handsOver({ trustEdits: ["プルリクエストがファクトリーの信頼するレシピを編集しています: .factory/setup.json。"] }, /ファクトリーの信頼するレシピを編集しています/, "a PR that edits what its checks run hands over despite verified evidence");
 assert.equal(
-  decideMerge(input({ ...auto, runner: { kind: "available" }, evidence: { state: "missing" }, trustEdits: ["The pull request edits CI workflows (.github/workflows/ci.yml)."] })).verify,
+  decideMerge(input({ ...auto, runner: { kind: "available" }, evidence: { state: "missing" }, trustEdits: ["プルリクエストが CI ワークフロー（.github/workflows/ci.yml）を編集しています。"] })).verify,
   undefined,
   "and the runner doesn't verify a head that may have rigged its checks",
 );
 assert.deepEqual(
   decideMerge(input({ ...auto, evidence: { state: "stale", sha: "h0" }, runner: { kind: "available" } })),
-  { outcome: "pending", reasons: ["Waiting for verification at h1."], verify: true },
+  { outcome: "pending", reasons: ["待機中: h1 での検証"], verify: true },
   "stale evidence under auto waits for the runner, which may start",
 );
 assert.deepEqual(
   decideMerge(input({ ...auto, evidence: { state: "missing" }, runner: { kind: "running" } })),
-  { outcome: "pending", reasons: ["Waiting for verification at h1."] },
+  { outcome: "pending", reasons: ["待機中: h1 での検証"] },
   "a running verification is waited for, not started again",
 );
 assert.deepEqual(
   decideMerge(input({ ...auto, evidence: { state: "missing" }, runner: { kind: "available" }, pr: facts({ checks: "pending" }) })),
-  { outcome: "pending", reasons: ["Waiting for checks, verification at h1."] },
+  { outcome: "pending", reasons: ["待機中: チェック、h1 での検証"] },
   "the runner waits until verification is all that is left",
 );
-handsOver({ ...auto, evidence: { state: "missing" }, runner: { kind: "failed", reason: "the job's sandbox is gone" } }, /couldn't run the checks itself: the job's sandbox is gone\.$/, "a runner verification that couldn't run");
-handsOver({ ...auto, evidence: { state: "missing" }, runner: { kind: "available" }, headSeenAt: NOW - 61 * 60_000 }, /^Verification at h1 didn't finish within 60 minutes\.$/, "verification past the timeout");
-handsOver({ ...auto, evidence: { state: "failed", sha: "h1", failed: ["lint"], passed: 3, total: 4 }, runner: { kind: "available" } }, /Checks failed at h1: lint/, "failed evidence is not re-run");
+handsOver({ ...auto, evidence: { state: "missing" }, runner: { kind: "failed", reason: "ジョブのサンドボックスがありません" } }, /ファクトリー自身もチェックを実行できませんでした: ジョブのサンドボックスがありません。$/, "a runner verification that couldn't run");
+handsOver({ ...auto, evidence: { state: "missing" }, runner: { kind: "available" }, headSeenAt: NOW - 61 * 60_000 }, /^60 分以内に終わりませんでした: h1 での検証$/, "verification past the timeout");
+handsOver({ ...auto, evidence: { state: "failed", sha: "h1", failed: ["lint"], passed: 3, total: 4 }, runner: { kind: "available" } }, /h1 でチェックが失敗しました: lint/, "failed evidence is not re-run");
 
 // --- a repo without CI: the factory's evidence at the head is the only CI
 const noCi = facts({ checks: "none" });
-assert.equal(noCiReason("h1abcdef99"), "No CI on this repo; relying on the factory's own checks at h1abcde.");
+assert.equal(noCiReason("h1abcdef99"), "このリポジトリには CI がないため、h1abcde でのファクトリー自身のチェックを根拠にしています。");
 assert.deepEqual(decideMerge(input({ ...auto, pr: noCi })), { outcome: "merge", reasons: [noCiReason("h1")] }, "no CI is no failure: verified evidence at the head merges, and says what it relied on");
 assert.deepEqual(decideMerge(input({ pr: noCi })).outcome, "merge", "trial too");
-handsOver({ ...auto, pr: noCi, evidence: { state: "missing" } }, /^Not verified at h1: /, "without evidence at the head there is nothing to rely on");
-handsOver({ ...auto, pr: noCi, evidence: { state: "failed", sha: "h1", failed: ["test"], passed: 3, total: 4 } }, /^Checks failed at h1: test\.$/, "failed evidence still hands over");
+handsOver({ ...auto, pr: noCi, evidence: { state: "missing" } }, /^h1 では未検証です（/, "without evidence at the head there is nothing to rely on");
+handsOver({ ...auto, pr: noCi, evidence: { state: "failed", sha: "h1", failed: ["test"], passed: 3, total: 4 } }, /^h1 でチェックが失敗しました: test。$/, "failed evidence still hands over");
 assert.deepEqual(
   decideMerge(input({ ...auto, pr: noCi, evidence: { state: "missing" }, runner: { kind: "available" } })),
-  { outcome: "pending", reasons: ["Waiting for verification at h1."], verify: true },
+  { outcome: "pending", reasons: ["待機中: h1 での検証"], verify: true },
   "the runner verifies the head itself, as with CI",
 );
 
@@ -213,8 +213,8 @@ const noBugbot = { policy: { ...DEFAULT_POLICY, autonomy: "auto" as const, requi
 assert.deepEqual(decideMerge(input({ ...noBugbot, pr: facts({ checks: "none", bugbot: { review: { state: "pending" }, findings: [] } }) })), { outcome: "merge", reasons: [noCiReason("h1")] }, "no waiting for a Bugbot that never comes");
 assert.equal(decideMerge(input({ ...noBugbot, pr: facts({ bugbot: { review: { state: "pending" }, findings: [] } }), headSeenAt: NOW - 61 * 60_000 })).outcome, "merge", "and no timeout for it");
 assert.equal(decideMerge(input({ ...noBugbot, pr: facts({ bugbot: { review: { state: "failed", conclusion: "timed_out" }, findings: [{ severity: "high", resolved: false }] } }) })).outcome, "merge", "nor its findings");
-assert.deepEqual(decideMerge(input({ ...auto, pr: facts({ checks: "none", bugbot: { review: { state: "pending" }, findings: [] } }) })), { outcome: "pending", reasons: ["Waiting for Bugbot."] }, "required, Bugbot is still waited for");
-handsOver({ ...auto, pr: facts({ checks: "none", bugbot: { review: { state: "pending" }, findings: [] } }), headSeenAt: NOW - 61 * 60_000 }, /^Bugbot didn't finish within 60 minutes\.$/, "until the timeout");
+assert.deepEqual(decideMerge(input({ ...auto, pr: facts({ checks: "none", bugbot: { review: { state: "pending" }, findings: [] } }) })), { outcome: "pending", reasons: ["待機中: Bugbot"] }, "required, Bugbot is still waited for");
+handsOver({ ...auto, pr: facts({ checks: "none", bugbot: { review: { state: "pending" }, findings: [] } }), headSeenAt: NOW - 61 * 60_000 }, /^60 分以内に終わりませんでした: Bugbot$/, "until the timeout");
 
 // --- GitHub parsing
 const run = (name: string, status: string, conclusion: string | null) => ({ name, status, conclusion });
@@ -226,7 +226,7 @@ assert.deepEqual(checkStateOf([run("Cursor Bugbot", "completed", "success")], no
 for (const conclusion of ["failure", "timed_out", "cancelled", "action_required", "stale", "skipped"]) {
   assert.deepEqual(checkStateOf([run("Cursor Bugbot", "completed", conclusion)], none).bugbot, { state: "failed", conclusion }, `Bugbot ${conclusion} is no review`);
 }
-handsOver({ pr: facts({ bugbot: { review: { state: "failed", conclusion: "timed_out" }, findings: [] } }) }, /^Bugbot didn't complete its review \(timed_out\)\.$/, "a crashed Bugbot with no threads");
+handsOver({ pr: facts({ bugbot: { review: { state: "failed", conclusion: "timed_out" }, findings: [] } }) }, /^Bugbot がレビューを完了しませんでした（timed_out）。$/, "a crashed Bugbot with no threads");
 assert.equal(checkStateOf([run("ci", "completed", "success")], { state: "success", total_count: 1 }, false).checks, "pending", "an incomplete listing is never green");
 assert.equal(checkStateOf([run("ci", "completed", "success"), run("Cursor Bugbot", "completed", "failure")], none).checks, "success", "Bugbot's own conclusion is not a check");
 assert.equal(checkStateOf([run("ci", "in_progress", null)], none).checks, "pending");
@@ -443,7 +443,7 @@ try {
     },
   );
   assert.deepEqual((await row(ASLEEP)).sandbox_snapshot, "im-snap-merge", "a hibernated job is decided on GitHub alone and stays asleep");
-  assert.deepEqual((await row(LABELED)).merge_decision!.reasons, ['The issue has the "review" label.']);
+  assert.deepEqual((await row(LABELED)).merge_decision!.reasons, ['イシューに "review" ラベルが付いています。']);
   assert.deepEqual((await row(OFF)).merge_decision, { outcome: "handover", reasons: [], autonomy: "off", headSha: null, headSeenAt: null, stageEventId: null, evaluatedAt: new Date(at(0)).toISOString() });
   assert.ok(!calls.some((c) => c.includes(prUrl(4)) || c.includes(OFF)), "an off repo asks neither GitHub nor Linear");
   assert.deepEqual((await row(CODEX)).merge_decision!.reasons, [], "a Codex run merges like Claude");
@@ -473,11 +473,11 @@ try {
   const t1 = at(30);
   assert.deepEqual(await decideMerges({ only: [GOOD], now: t1 }), [`${GOOD}:pending`]);
   const moved = (await row(GOOD)).merge_decision!;
-  assert.deepEqual([moved.headSha, moved.headSeenAt, moved.reasons], ["h2", new Date(t1).toISOString(), ["Waiting for checks."]]);
+  assert.deepEqual([moved.headSha, moved.headSeenAt, moved.reasons], ["h2", new Date(t1).toISOString(), ["待機中: チェック"]]);
   assert.deepEqual(await decideMerges({ only: [GOOD], now: t1 + 5 * 60_000 }), [], "pending is read every pass, with no new audit while it holds");
   assert.equal((await row(GOOD)).merge_decision!.headSeenAt, new Date(t1).toISOString(), "the timeout runs from when the head was first seen");
   assert.deepEqual(await decideMerges({ only: [GOOD], now: t1 + 61 * 60_000 }), [`${GOOD}:handover`]);
-  assert.deepEqual((await row(GOOD)).merge_decision!.reasons, ["Checks didn't finish within 60 minutes."]);
+  assert.deepEqual((await row(GOOD)).merge_decision!.reasons, ["60 分以内に終わりませんでした: チェック"]);
   assert.equal((await auditsOf(GOOD)).length, 3);
 
   // Autonomy and a new report both force a fresh decision.

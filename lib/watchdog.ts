@@ -33,7 +33,7 @@ export function watch(input: WatchInput, limits: FactoryLimits): WatchAction {
   const nudged = input.nudgedAt !== null && input.nudgedStage === input.stage;
 
   if (input.thread === "gone") {
-    return { kind: "fail", reason: `its T3 thread is gone (stage ${input.stage})` };
+    return { kind: "fail", reason: `T3 スレッドがなくなりました（ステージ ${input.stage}）` };
   }
   if (!input.tracked) return input.nudgedAt ? { kind: "reset" } : { kind: "ok" };
   const stuck =
@@ -48,7 +48,7 @@ export function watch(input: WatchInput, limits: FactoryLimits): WatchAction {
   if (sinceNudge < limits.failAfterNudgeMinutes) return { kind: "ok" };
   return {
     kind: "fail",
-    reason: `no progress in stage ${input.stage} for ${Math.round(sinceNudge)} min after a watchdog nudge (thread ${input.thread})`,
+    reason: `ウォッチドッグが促したあとも、ステージ ${input.stage} で ${Math.round(sinceNudge)} 分進みがありません（スレッド ${input.thread}）`,
   };
 }
 
