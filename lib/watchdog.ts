@@ -1,5 +1,6 @@
 import type { FactoryLimits } from "./config";
 import type { Stage } from "./events";
+import { OWNER_LANGUAGE } from "./owner-language";
 
 export type ThreadState = "running" | "stopped" | "gone";
 
@@ -57,5 +58,7 @@ export function nudgeMessage(key: string, stage: Stage, idleMinutes: number, pla
     `Watchdog: factory run ${key} has made no progress for ${idleMinutes} minutes in stage ${stage}.`,
     "",
     `Continue the factory playbook (${playbook}) where you left off. Call report_stage with your current stage now. If you are blocked, report waiting with a concrete question. If you cannot continue, report failed with the reason.`,
+    "",
+    OWNER_LANGUAGE,
   ].join("\n");
 }

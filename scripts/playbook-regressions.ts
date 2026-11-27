@@ -10,6 +10,8 @@ const { imageProblem, installPlaybooks, pinnedVersions, playbooksVersion, SANDBO
 const { conflictMessage } = await import("../lib/conflicts");
 const { resumeMessage } = await import("../lib/resume");
 const { nudgeMessage } = await import("../lib/watchdog");
+const { changesMessage } = await import("../lib/inbox");
+const { OWNER_LANGUAGE } = await import("../lib/owner-language");
 
 const root = resolve(import.meta.dirname, "..");
 const pins = factorySchema.parse({}).sandbox;
@@ -57,6 +59,21 @@ for (const path of [factoryPlaybook("modal"), factoryPlaybook("local")]) {
     assert.ok(text.includes(`factory playbook (${path})`), `${name} names ${path}`);
     assert.ok(!text.includes(REPO_PLAYBOOK), `${name} does not point at a repo copy`);
   }
+}
+
+// Every message to a thread asks for Japanese, and both playbooks carry the rule it points at.
+assert.match(OWNER_LANGUAGE, /\bin Japanese\b/, "the shared line asks for Japanese");
+for (const [name, text] of [
+  ["launch", await withPlaybook("Work FAC-1: Title", "local", host(false), "/work/repo")],
+  ["conflict", conflictMessage("FAC-1", "https://github.com/o/r/pull/1", factoryPlaybook("local"))],
+  ["resume", resumeMessage("FAC-1", "Which one?", "The first.", factoryPlaybook("local"))],
+  ["nudge", nudgeMessage("FAC-1", "implementing", 30, factoryPlaybook("local"))],
+  ["changes", changesMessage({ prUrl: "https://github.com/o/r/pull/1", feedback: { from: "panel", id: "p1", actor: "owner", body: "Rename it." } })],
+] as const) {
+  assert.ok(text.includes(OWNER_LANGUAGE), `${name} asks for Japanese`);
+}
+for (const file of ["factory.md", "onboarding.md"]) {
+  assert.ok(readFileSync(join(root, "playbooks", file), "utf8").includes("- **Write for the owner in Japanese.**"), `${file} has the language rule`);
 }
 
 // The image build copies both playbooks and records the hash of what the image holds.

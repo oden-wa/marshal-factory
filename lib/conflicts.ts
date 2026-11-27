@@ -3,6 +3,7 @@ import type { NodePgDatabase } from "drizzle-orm/node-postgres";
 import type * as schema from "../db/schema";
 import { jobs, runs } from "../db/schema";
 import type { JobId } from "./sources/shapes";
+import { OWNER_LANGUAGE } from "./owner-language";
 
 /** Claims a conflicting PR head for one send-back; false when this head was already handled. */
 export async function claimConflict(db: NodePgDatabase<typeof schema>, id: JobId, head: string) {
@@ -44,5 +45,7 @@ export function conflictMessage(key: string, prUrl: string, playbook: string) {
     "2. Resolve every conflict so that both main's change and yours keep working. Then run lint, typecheck, tests and build.",
     "3. Commit the merge, push, wait for CI and review bots, and call report_stage with stage pr and the PR URL again.",
     "If you cannot tell how the two changes should combine, report waiting with a concrete question instead of guessing.",
+    "",
+    OWNER_LANGUAGE,
   ].join("\n");
 }
