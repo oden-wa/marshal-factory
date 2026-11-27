@@ -291,7 +291,7 @@ function actionButton(action: InboxAction, job: NotifyJob): ActionButton {
       title: { type: "plain_text", text: "承認してマージしますか？" },
       text: {
         type: "mrkdwn",
-        text: clip(`ファクトリーが自動マージと同じ手順で ${escape(job.key)} を ${escape(job.repo)} にマージし、その後 main を見守ります。新しい push、失敗中または実行中のチェック、コンフリクト、GitHub によるマージ拒否のいずれかがあれば、マージは止まります。`, TEXT_MAX),
+        text: clip(`ファクトリーが自動マージと同じ手順で ${escape(job.key)} を ${escape(job.repo)} にマージし、その後マージ先のブランチを見守ります。新しい push、失敗中または実行中のチェック、コンフリクト、GitHub によるマージ拒否のいずれかがあれば、マージは止まります。`, TEXT_MAX),
       },
       confirm: { type: "plain_text", text: "承認してマージする" },
       deny: { type: "plain_text", text: "キャンセル" },
