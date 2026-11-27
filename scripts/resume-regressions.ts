@@ -37,7 +37,7 @@ assert.equal(both.kind, "resume");
 assert.deepEqual(both.kind === "resume" && both.replies.map((r) => r.id), ["c-1", "c-2"], "replies come together, oldest first");
 assert.equal(both.kind === "resume" && both.answer, "1: (b)\n\n2: (b)");
 
-const ack = { id: resumeCommentId(id, ["c-1", "c-2"]), body: "Answer received, resuming.", createdAt: "2026-10-23T10:07:00.000Z" };
+const ack = { id: resumeCommentId(id, ["c-1", "c-2"]), body: "回答を受け取りました。再開します。", createdAt: "2026-10-23T10:07:00.000Z" };
 assert.deepEqual(
   planResume(
     { ...job, source_state: { ...job.source_state, factoryCommentIds: [...job.source_state.factoryCommentIds, ack.id] }, delivered_reply_ids: ["c-1", "c-2"] },

@@ -231,15 +231,15 @@ export const unproven = (e: HeadEvidence): e is Extract<HeadEvidence, { state: "
 export function notVerifiedWhy(e: Extract<HeadEvidence, { state: "missing" | "stale" | "dirty" | "incomplete" | "untrusted" }>) {
   switch (e.state) {
     case "missing":
-      return "no checks were reported for it";
+      return "チェックの報告がありません";
     case "stale":
-      return `the latest checks ran at ${shortSha(e.sha)}`;
+      return `最新のチェックは ${shortSha(e.sha)} で実行されたものです`;
     case "dirty":
-      return "the checks ran with uncommitted changes";
+      return "チェックはコミットされていない変更がある状態で実行されました";
     case "incomplete":
-      return `the checks didn't include ${e.missing.join(", ")}`;
+      return `チェックに ${e.missing.join(", ")} が含まれていません`;
     case "untrusted":
-      return `the checks ran other commands than the recipe records for ${e.mismatched.join(", ")}`;
+      return `${e.mismatched.join(", ")} のチェックが、レシピに記録されたものと違うコマンドで実行されました`;
     default: {
       const never: never = e;
       throw new Error(`unknown evidence state ${String(never)}`);

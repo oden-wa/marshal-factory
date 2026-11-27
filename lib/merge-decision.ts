@@ -166,21 +166,21 @@ const minutes = (ms: number) => Math.round(ms / 60_000);
 /** Hard limits only; each failure is one plain reason. */
 function hardLimits(input: DecisionInput, pr: PrFacts) {
   const reasons: string[] = [];
-  if (input.labels.some((l) => l.toLowerCase() === REVIEW_LABEL)) reasons.push(`The issue has the "${REVIEW_LABEL}" label.`);
-  if (pr.checks === "failure") reasons.push("A check failed on the latest commit.");
-  if (pr.mergeable === "conflicting") reasons.push("The pull request conflicts with its base branch.");
+  if (input.labels.some((l) => l.toLowerCase() === REVIEW_LABEL)) reasons.push(`イシューに "${REVIEW_LABEL}" ラベルが付いています。`);
+  if (pr.checks === "failure") reasons.push("最新のコミットでチェックが失敗しました。");
+  if (pr.mergeable === "conflicting") reasons.push("プルリクエストがベースブランチとコンフリクトしています。");
   if (input.policy.requireBugbot) {
-    if (pr.bugbot.review.state === "failed") reasons.push(`Bugbot didn't complete its review (${pr.bugbot.review.conclusion}).`);
+    if (pr.bugbot.review.state === "failed") reasons.push(`Bugbot がレビューを完了しませんでした（${pr.bugbot.review.conclusion}）。`);
     const open = pr.bugbot.findings.filter((f) => !f.resolved && f.severity !== "low");
-    if (open.length > 0) reasons.push(`Bugbot has ${open.length} unresolved medium or high finding${open.length === 1 ? "" : "s"}.`);
+    if (open.length > 0) reasons.push(`Bugbot の未解決の medium または high の指摘が ${open.length} 件あります。`);
   }
   return reasons;
 }
 
 function agentReasons({ assessment }: DecisionInput) {
-  if (!assessment) return ["The agent didn't report an assessment."];
+  if (!assessment) return ["エージェントが評価を報告しませんでした。"];
   if (assessment.recommendation === "merge") return [];
-  return [`The agent isn't confident: ${assessment.confidence.reason ?? "it recommends handing over."}`];
+  return [`エージェントに確信がありません: ${assessment.confidence.reason ?? "引き継ぎを勧めています。"}`];
 }
 
 /** A change to a page needs screenshots of it, when the agent had a browser to take them with. */
@@ -188,8 +188,8 @@ function screenshotReasons({ assessment, browser }: DecisionInput, pr: PrFacts):
   if (!browser || !assessment || assessment.screenshots?.length) return [];
   const ui = uiFiles(pr.files.map((f) => f.path));
   if (ui.length === 0) return [];
-  const named = ui.slice(0, 3).join(", ") + (ui.length > 3 ? ` and ${ui.length - 3} more` : "");
-  return [`The pull request changes UI files (${named}), but the agent attached no screenshots.`];
+  const named = ui.slice(0, 3).join(", ") + (ui.length > 3 ? `、ほか ${ui.length - 3} 件` : "");
+  return [`プルリクエストが UI ファイル（${named}）を変更していますが、エージェントはスクリーンショットを添付していません。`];
 }
 
 /** The verified-at-head limit: what the agent or the runner ran at exactly the PR's head. */
@@ -199,9 +199,9 @@ function evidenceReasons({ evidence, runner }: DecisionInput, pr: PrFacts): stri
     case "verified":
       return [];
     case "no_checks":
-      return ["No checks defined for this repo."];
+      return ["このリポジトリにはチェックが定義されていません。"];
     case "failed":
-      return [`Checks failed at ${head}: ${evidence.failed.join(", ")}.`];
+      return [`${head} でチェックが失敗しました: ${evidence.failed.join(", ")}。`];
     case "missing":
     case "stale":
     case "dirty":
@@ -212,9 +212,9 @@ function evidenceReasons({ evidence, runner }: DecisionInput, pr: PrFacts): stri
         case "running":
           return [];
         case "failed":
-          return [`Not verified at ${head}: ${notVerifiedWhy(evidence)}, and the factory couldn't run the checks itself: ${runner.reason}.`];
+          return [`${head} では未検証です（${notVerifiedWhy(evidence)}）。ファクトリー自身もチェックを実行できませんでした: ${runner.reason}。`];
         case "unavailable":
-          return [`Not verified at ${head}: ${notVerifiedWhy(evidence)}; ${runner.reason}.`];
+          return [`${head} では未検証です（${notVerifiedWhy(evidence)}）。${runner.reason}。`];
         default: {
           const never: never = runner;
           throw new Error(`unknown runner verification ${String(never)}`);
@@ -227,13 +227,13 @@ function evidenceReasons({ evidence, runner }: DecisionInput, pr: PrFacts): stri
   }
 }
 
-const verificationWait = (pr: PrFacts) => `verification at ${shortSha(pr.headSha)}`;
+const verificationWait = (pr: PrFacts) => `${shortSha(pr.headSha)} での検証`;
 
 function waitingOn(input: DecisionInput, pr: PrFacts) {
   const waiting: string[] = [];
-  if (pr.checks === "pending") waiting.push("checks");
+  if (pr.checks === "pending") waiting.push("チェック");
   if (input.policy.requireBugbot && pr.bugbot.review.state === "pending") waiting.push("Bugbot");
-  if (pr.mergeable === "unknown") waiting.push("GitHub's mergeability check");
+  if (pr.mergeable === "unknown") waiting.push("GitHub のマージ可否の確認");
   if (evidenceReasons(input, pr).length === 0 && input.evidence.state !== "verified") waiting.push(verificationWait(pr));
   return waiting;
 }
@@ -251,15 +251,15 @@ export function decideMerge(input: DecisionInput): Decision {
     const timeout = input.checksTimeoutMs ?? CHECKS_TIMEOUT_MS;
     if (input.now - input.headSeenAt < timeout) {
       const onlyVerification = waiting.length === 1 && waiting[0] === verificationWait(input.pr) && input.runner.kind === "available";
-      return { outcome: "pending", reasons: [`Waiting for ${waiting.join(", ")}.`], ...(onlyVerification && { verify: true as const }) };
+      return { outcome: "pending", reasons: [`待機中: ${waiting.join("、")}`], ...(onlyVerification && { verify: true as const }) };
     }
-    return { outcome: "handover", reasons: [`${waiting.join(", ")} didn't finish within ${minutes(timeout)} minutes.`.replace(/^./, (c) => c.toUpperCase())] };
+    return { outcome: "handover", reasons: [`${minutes(timeout)} 分以内に終わりませんでした: ${waiting.join("、")}`] };
   }
   return { outcome: "merge", reasons: input.pr.checks === "none" ? [noCiReason(input.pr.headSha)] : [] };
 }
 
 /** Said on a merge where the factory's evidence at the head stood in for CI. */
-export const noCiReason = (headSha: string) => `No CI on this repo; relying on the factory's own checks at ${shortSha(headSha)}.`;
+export const noCiReason = (headSha: string) => `このリポジトリには CI がないため、${shortSha(headSha)} でのファクトリー自身のチェックを根拠にしています。`;
 
 export function reviewSummary(pr: Pick<PrFacts, "headSha" | "files" | "bugbot">): ReviewSummary {
   const open = pr.bugbot.findings.filter((f) => !f.resolved);
@@ -278,12 +278,12 @@ export function reviewSummary(pr: Pick<PrFacts, "headSha" | "files" | "bugbot">)
  */
 export function approvalBlockers(pr: Pick<PrFacts, "checks" | "mergeable">): string[] {
   const reasons: string[] = [];
-  if (pr.checks === "failure") reasons.push("A check failed on the latest commit.");
-  if (pr.checks === "pending") reasons.push("Checks are still running on the latest commit.");
-  if (pr.mergeable === "conflicting") reasons.push("The pull request conflicts with its base branch.");
-  if (pr.mergeable === "unknown") reasons.push("GitHub is still checking whether the pull request merges cleanly.");
+  if (pr.checks === "failure") reasons.push("最新のコミットでチェックが失敗しました。");
+  if (pr.checks === "pending") reasons.push("最新のコミットでチェックがまだ実行中です。");
+  if (pr.mergeable === "conflicting") reasons.push("プルリクエストがベースブランチとコンフリクトしています。");
+  if (pr.mergeable === "unknown") reasons.push("GitHub がプルリクエストを問題なくマージできるか確認しています。");
   return reasons;
 }
 
 /** The reason a decision hands over when GitHub refuses the factory's merge. */
-export const blockedReason = (detail: string) => `The factory's GitHub App can't merge in this repo: ${detail}`;
+export const blockedReason = (detail: string) => `ファクトリーの GitHub App はこのリポジトリでマージできません: ${detail}`;

@@ -79,7 +79,7 @@ async function handle(intent: IntentRow) {
     case "claim":
       return { claimed: await ops.claim(), ...(await launchAndAnnounce()) };
     case "stop":
-      return { stop: await ops.stopJob(intent.job_id!, intent.detail ?? "stopped in its source") };
+      return { stop: await ops.stopJob(intent.job_id!, intent.detail ?? "ソース側で止められました") };
     case "answer":
       return {
         resumed: await ops.resumeAnswered(),

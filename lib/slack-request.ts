@@ -7,8 +7,8 @@ import { redact } from "@/lib/slack";
 /** Slack signs each request; one older than this is a replay. */
 export const MAX_SKEW_SECONDS = 5 * 60;
 
-export const NOT_OWNER = "Only the factory owner can act from Slack.";
-export const NO_TOKEN = "The panel has no SLACK_BOT_TOKEN, so it can't act from Slack.";
+export const NOT_OWNER = "Slack から操作できるのはファクトリーのオーナーだけです。";
+export const NO_TOKEN = "パネルに SLACK_BOT_TOKEN が設定されていないため、Slack から操作できません。";
 
 /** Checks `X-Slack-Signature`: v0, HMAC-SHA256 of `v0:<timestamp>:<raw body>` with the signing secret. */
 export function verifySignature(secret: string, timestamp: string | null, signature: string | null, body: string, nowMs: number) {
@@ -39,7 +39,7 @@ export const ephemeral = (secrets: readonly string[], text: string) => ({ respon
 
 /** What may be shown of an unexpected error: its message, redacted, never a stack. */
 export const safeMessage = (secrets: readonly string[], error: unknown) =>
-  `Something went wrong: ${redact(error instanceof Error ? error.message : String(error), secrets).slice(0, 300)}`;
+  `エラーが発生しました: ${redact(error instanceof Error ? error.message : String(error), secrets).slice(0, 300)}`;
 
 export const parseJson = (text: string): unknown => {
   try {

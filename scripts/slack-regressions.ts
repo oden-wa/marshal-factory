@@ -142,7 +142,7 @@ try {
   const json = JSON.stringify(message);
   assert.ok(!json.includes(TOKEN), "a token in a question never reaches Slack");
   assert.equal((message.blocks[0] as { text: { text: string } }).text.text, "❓ PURE-1 · Fix <the> & thing");
-  assert.match(json, /\*Question:\* Use \[redacted\] for &lt;db&gt; &amp; co\?/, "mrkdwn text is escaped");
+  assert.match(json, /\*質問:\* Use \[redacted\] for &lt;db&gt; &amp; co\?/, "mrkdwn text is escaped");
   assert.match(json, /claudeAgent|Codex/);
   assert.match(json, /\$1\.23/);
   const actions = message.blocks.find((b) => b.type === "actions") as { block_id: string; elements: { url?: string; action_id: string }[] };
@@ -157,16 +157,16 @@ try {
     [SLACK_ACTION_IDS.answer],
     "an open question offers the inbox's Answer; the acting buttons are covered by slack-actions-regressions",
   );
-  assert.equal(resolution("question", { ...pureJob, stage: "implementing", answered_at: new Date(1) }), "✅ Answered");
-  assert.equal(resolution("failed", { ...pureJob, stage: "queued" }), "🔁 Retried");
-  assert.equal(resolution("failed", { ...pureJob, stage: "failed", dismissed_at: new Date(1) }), "Dismissed");
-  assert.equal(resolution("handover", { ...pureJob, stage: "failed", dismissed_at: new Date(1) }), "Closed");
-  assert.equal(resolution("handover", { ...pureJob, stage: "merged", merge_decision: decision({ merged: { sha: "s", method: "squash", at: "x", base: "main", title: "t", commits: 1, via: "inbox" } }) }), "✅ Merged by the factory");
+  assert.equal(resolution("question", { ...pureJob, stage: "implementing", answered_at: new Date(1) }), "✅ 回答済み");
+  assert.equal(resolution("failed", { ...pureJob, stage: "queued" }), "🔁 再試行済み");
+  assert.equal(resolution("failed", { ...pureJob, stage: "failed", dismissed_at: new Date(1) }), "見送り済み");
+  assert.equal(resolution("handover", { ...pureJob, stage: "failed", dismissed_at: new Date(1) }), "クローズ済み");
+  assert.equal(resolution("handover", { ...pureJob, stage: "merged", merge_decision: decision({ merged: { sha: "s", method: "squash", at: "x", base: "main", title: "t", commits: 1, via: "inbox" } }) }), "✅ ファクトリーがマージ");
   const settledStop = { ...requestedStop({ at: new Date(0), by: OWNER, reason: "r", reopen: false }), settledAt: new Date(1).toISOString() };
-  assert.equal(resolution("stop_unconfirmed", { ...pureJob, stop: { ...settledStop, state: "unconfirmed" } }), "Resolved", "still waiting on the owner");
-  assert.equal(resolution("stop_unconfirmed", { ...pureJob, stop: { ...settledStop, state: "escalated", settledAt: null, retries: 1 } }), "🔁 Retrying stop", "a retried stop is not confirmed yet");
-  assert.equal(resolution("stop_unconfirmed", { ...pureJob, stop: { ...settledStop, state: "confirmed", retries: 1 } }), "✅ Stop confirmed");
-  assert.equal(resolution("stop_unconfirmed", { ...pureJob, stop: { ...settledStop, state: "unconfirmed" }, dismissed_at: new Date(2) }), "Dismissed");
+  assert.equal(resolution("stop_unconfirmed", { ...pureJob, stop: { ...settledStop, state: "unconfirmed" } }), "解決済み", "still waiting on the owner");
+  assert.equal(resolution("stop_unconfirmed", { ...pureJob, stop: { ...settledStop, state: "escalated", settledAt: null, retries: 1 } }), "🔁 停止を再試行中", "a retried stop is not confirmed yet");
+  assert.equal(resolution("stop_unconfirmed", { ...pureJob, stop: { ...settledStop, state: "confirmed", retries: 1 } }), "✅ 停止を確認");
+  assert.equal(resolution("stop_unconfirmed", { ...pureJob, stop: { ...settledStop, state: "unconfirmed" }, dismissed_at: new Date(2) }), "見送り済み");
   assert.equal(INTENT_ROUTES.slack_test, "slack");
   assert.equal(deliveryFor("slack_test", null, "a"), "skip", "a runner without a Slack token leaves the test message alone");
   assert.equal(deliveryFor("slack_test", "b", "a", true), "lease", "any runner with a token takes it");
@@ -238,11 +238,11 @@ try {
   assert.equal(updates.length, 1);
   assert.equal(updates[0]!.params.ts, row!.ts, "the question's own message");
   assert.equal(updates[0]!.params.channel, "DU0OWNER");
-  assert.match(updates[0]!.params.text!, /✅ Answered/);
+  assert.match(updates[0]!.params.text!, /✅ 回答済み/);
   assert.equal(since(mark, "chat.postMessage").length, 0, "no new message for the answer");
   [row] = await rowsFor(a);
   assert.equal(row!.state, "resolved");
-  assert.equal(row!.resolution, "✅ Answered");
+  assert.equal(row!.resolution, "✅ 回答済み");
   mark = calls.length;
   await pass();
   assert.equal(since(mark).length, 0, "a resolved message is left alone");
@@ -267,7 +267,7 @@ try {
   await db.update(jobs).set({ dismissed_at: new Date(Date.now() + 60_000) }).where(eq(jobs.id, b as JobRow["id"]));
   mark = calls.length;
   await pass();
-  assert.match(since(mark, "chat.update")[0]!.params.text!, /Dismissed/, "a dismissed failure says so");
+  assert.match(since(mark, "chat.update")[0]!.params.text!, /見送り済み/, "a dismissed failure says so");
 
   // --- quiet hours hold back all but the urgent kinds
   const hour = (offset: number) => new Date(Date.now() + offset * 3_600_000).toISOString().slice(11, 16);
@@ -293,7 +293,7 @@ try {
   assert.deepEqual((await rowsFor(d)).map((r) => r.kind).sort(), ["merged", "revert_failed"]);
   const mergedRow = (await rowsFor(d)).find((r) => r.kind === "merged")!;
   assert.equal(mergedRow.state, "resolved", "an update is resolved as it is posted");
-  assert.match(since(mark, "chat.postMessage").find((p) => p.params.text!.includes(key("D")))!.params.text!, /✅ .* Merged into main as d0d0d0d/);
+  assert.match(since(mark, "chat.postMessage").find((p) => p.params.text!.includes(key("D")))!.params.text!, /✅ .* main に d0d0d0d としてマージしました。/);
 
   // --- a handover the owner approves turns into a merge
   const e = await track("E", { stage: "pr", stage_at: new Date(), pr_url: "https://github.com/o/r/pull/10", merge_decision: decision({}) });
@@ -304,14 +304,14 @@ try {
   mark = calls.length;
   await pass();
   assert.deepEqual(since(mark).map((c) => c.method), ["chat.update"], "an approved merge edits the handover and posts nothing new");
-  assert.match(since(mark)[0]!.params.text!, /✅ Merged by the factory/);
+  assert.match(since(mark)[0]!.params.text!, /✅ ファクトリーがマージ/);
 
   // --- a revert the factory did is an update
   await setJob(d, { merge_decision: decision({ outcome: "merge", merged, watch: { state: "reverted", until: new Date().toISOString(), failed: ["ci"], revertPr: "https://github.com/o/r/pull/11", reason: null } }) });
   mark = calls.length;
   await pass();
-  assert.match(since(mark, "chat.postMessage")[0]!.params.text!, /↩️ .*so the factory reverted it/);
-  assert.match(since(mark, "chat.update")[0]!.params.text!, /Resolved/, "the failed revert's message resolves");
+  assert.match(since(mark, "chat.postMessage")[0]!.params.text!, /↩️ .*ファクトリーがリバートしました。/);
+  assert.match(since(mark, "chat.update")[0]!.params.text!, /解決済み/, "the failed revert's message resolves");
 
   // --- an old event is in the panel, not Slack
   const old = new Date(Date.now() - NOTIFY_WINDOW_MS - 60_000);
@@ -440,7 +440,7 @@ try {
   mark = calls.length;
   const sent = await sendSlackTest(JSON.parse(intent!.detail!), slack);
   assert.deepEqual(sent, { sent: { to: "owner", channel: "DU0OWNER" } });
-  assert.match(calls.at(-1)!.params.text!, /Test from the marshal factory, sent by owner@example.com/);
+  assert.match(calls.at(-1)!.params.text!, /Marshal Factory からのテストメッセージです（送信者: owner@example\.com）/);
   await db.update(intents).set({ result: JSON.stringify({ error: "a failed try" }) }).where(eq(intents.id, requested.intentId));
   assert.deepEqual(await slackTestOutcome(deps, requested.intentId), { status: "pending" }, "an error on an open intent is not final");
   await db.update(intents).set({ handled_at: new Date(), result: JSON.stringify({ error: "channel_not_found" }) }).where(eq(intents.id, requested.intentId));

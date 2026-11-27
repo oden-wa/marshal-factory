@@ -99,7 +99,7 @@ export async function postMerged(jobKey: string, prUrl: string, sessionId: strin
     at: Date.now(),
     kind: "stage",
     stage: "merged",
-    summary: `Merged ${prUrl}`,
+    summary: `マージしました: ${prUrl}`,
     prUrl,
     jobKey,
   });
@@ -129,7 +129,7 @@ async function sendBackForConflict(job: Job, head: string) {
         at: now,
         kind: "stage",
         stage: "failed",
-        summary: `${job.pr_url} conflicts with main and its T3 thread is gone.`,
+        summary: `${job.pr_url} が main とコンフリクトしていて、T3 スレッドも残っていません。`,
         jobKey: job.key,
       });
       return true;
@@ -146,7 +146,7 @@ async function sendBackForConflict(job: Job, head: string) {
     at: now,
     kind: "stage",
     stage: "implementing",
-    summary: `${job.pr_url} conflicts with main; the thread is merging main into the branch.`,
+    summary: `${job.pr_url} が main とコンフリクトしています。スレッドが main をブランチにマージしています。`,
     jobKey: job.key,
   });
   return true;
@@ -174,7 +174,7 @@ export async function resumeAnswered() {
         .set({
           stage: "failed",
           stage_at: now,
-          stage_summary: `Moved to ${plan.state} in ${SOURCE_SHAPES[job.source].label} while waiting; not resumed.`,
+          stage_summary: `待機中に ${SOURCE_SHAPES[job.source].label} で ${plan.state} に移動されたため、再開しませんでした。`,
           question: null,
           resume_context: null,
           stage_event_id: closed,
@@ -220,8 +220,8 @@ export async function resumeAnswered() {
     }
 
     const summary = alive
-      ? "Answer received; the thread resumes from triage."
-      : "Answer received; a fresh thread will pick it up.";
+      ? "回答を受け取りました。スレッドはトリアージから再開します。"
+      : "回答を受け取りました。新しいスレッドが引き継ぎます。";
     await postEvent({
       eventId: runnerEventId("resume", job.external_id, replyIds.join(",")),
       sessionId: job.session_id ?? runnerEventId("resume", job.external_id),
@@ -320,7 +320,7 @@ export const jobTracked = (job: Pick<JobRow, "provider">, drivers: ReadonlyMap<s
 /** Fails the stage this pass looked at, so a report that landed since then wins; false when one did. */
 export async function watchdogFail(job: Pick<JobRow, "id" | "key" | "external_id" | "attempt" | "stage" | "stage_event_id" | "session_id">, reason: string, now = new Date()) {
   const eventId = runnerEventId("watchdog", job.external_id, job.attempt, job.stage_event_id ?? job.stage);
-  const summary = `Watchdog stopped this run: ${reason}.`;
+  const summary = `ウォッチドッグがこの実行を止めました: ${reason}。`;
   const failed = await db
     .update(jobs)
     .set({ stage: "failed", stage_at: now, stage_summary: summary, question: null, stage_event_id: eventId, updated_at: now })
@@ -785,7 +785,7 @@ export async function stopJob(id: JobId, detail: string) {
       .set({
         stage: "failed",
         stage_at: now,
-        stage_summary: `Stopped: ${detail}.`,
+        stage_summary: `停止しました: ${detail}。`,
         question: null,
         stage_event_id: eventId,
         synced_event_id: eventId,

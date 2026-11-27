@@ -31,7 +31,7 @@ const SECRET = /\b(?:gh[opsur]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|sk-
 /** The thread's last message as a question: tokens masked, cut to what a stage report takes. */
 export function questionFrom(message: string | null, settled: Exclude<Settled, "failed">) {
   const text = message?.replace(SECRET, "[redacted]").trim();
-  const fallback = `The thread ${settled === "completed" ? "finished" : "was interrupted"} without opening a pull request. How should it go on?`;
+  const fallback = `スレッドはプルリクエストを開かないまま${settled === "completed" ? "終了しました" : "中断されました"}。どう進めればよいですか？`;
   if (!text) return fallback;
   return text.length > 2000 ? `${text.slice(0, 1999)}…` : text;
 }
@@ -63,7 +63,7 @@ async function inferJob(job: Job, now: number): Promise<string | undefined> {
       return "merged";
     }
     if (pr?.state === "open") {
-      await post(job, "pr", { summary: `Opened ${pr.url}`, prUrl: pr.url });
+      await post(job, "pr", { summary: `プルリクエストを作成しました: ${pr.url}`, prUrl: pr.url });
       return "pr";
     }
   }
@@ -74,15 +74,15 @@ async function inferJob(job: Job, now: number): Promise<string | undefined> {
   const settled = settledAs(thread.status);
   switch (settled) {
     case "failed":
-      return (await watchdogFail(job, `its T3 thread failed (stage ${job.stage})`)) ? "failed" : undefined;
+      return (await watchdogFail(job, `T3 スレッドが失敗しました（ステージ ${job.stage}）`)) ? "failed" : undefined;
     case "completed":
     case "interrupted":
       if (job.pr_url) {
-        await post(job, "pr", { summary: `The thread settled after the conflict send-back; ${job.pr_url} is up for review again.`, prUrl: job.pr_url });
+        await post(job, "pr", { summary: `コンフリクトの差し戻し後にスレッドが止まりました。${job.pr_url} をもう一度レビューできます。`, prUrl: job.pr_url });
         return "pr";
       }
       await post(job, "waiting", {
-        summary: `The thread ${settled === "completed" ? "finished" : "was interrupted"} without opening a pull request.`,
+        summary: `スレッドはプルリクエストを開かないまま${settled === "completed" ? "終了しました" : "中断されました"}。`,
         question: questionFrom(thread.lastMessage, settled),
       });
       return "waiting";

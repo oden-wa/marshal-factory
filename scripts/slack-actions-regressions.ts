@@ -119,7 +119,7 @@ const repliesTo = (url: string) => responses.filter((r) => url.endsWith(r.path))
 
 const decision = (over: Partial<MergeDecision> = {}): MergeDecision => ({
   outcome: "handover",
-  reasons: ["The agent isn't confident: the migration is untested."],
+  reasons: ["エージェントに確信がありません: the migration is untested."],
   autonomy: "auto",
   evaluatedAt: new Date().toISOString(),
   headSha: "h1",
@@ -158,10 +158,10 @@ try {
   assert.deepEqual(buttons("stop_unconfirmed"), [SLACK_ACTION_IDS.retry_stop, SLACK_ACTION_IDS.dismiss]);
   assert.deepEqual(buttons("merged"), [], "an update offers nothing to do");
   assert.deepEqual(buttons("handover", "✅ Merged"), [], "a resolved message has no action buttons");
-  assert.deepEqual(buttons("handover", null, "⏳ Merging…"), [], "nor does a pending one");
+  assert.deepEqual(buttons("handover", null, "⏳ マージしています…"), [], "nor does a pending one");
   const open = renderMessage({ id: "e", kind: "handover", job: pureJob, reason: "r" }, facts);
   const approveButton = (open.blocks.at(-1) as { elements: { action_id: string; confirm?: { title: { text: string } } }[] }).elements[0]!;
-  assert.equal(approveButton.confirm?.title.text, "Approve and merge?", "approving asks first");
+  assert.equal(approveButton.confirm?.title.text, "承認してマージしますか？", "approving asks first");
   assert.ok(actionIds(JSON.stringify(renderMessage({ id: "e", kind: "handover", job: pureJob, reason: "r" }, facts, "✅ Merged").blocks)).includes(SLACK_LINK_ACTION_IDS.panel), "the links stay");
   assert.notEqual(slackRequestId("a", "approve"), slackRequestId("b", "approve"));
   assert.equal(slackRequestId("a", "approve"), slackRequestId("a", "approve"), "one action on one event is one request");
@@ -215,7 +215,7 @@ try {
   assert.deepEqual(approveDetailSchema.parse(JSON.parse(approvals[0]!.detail!)), { actor: OWNER, headSha: "h1", via: "inbox" }, "the head the decision read, as the inbox's approval");
   assert.deepEqual(await inbox.approveMerge(deps.inbox, hand.id, requestId, "h1"), { ok: true, intentId: approvals[0]!.id }, "the panel's own action finds the same intent");
   const pendingUpdate = updatesOf(hand.ts)[0]!;
-  assert.match(pendingUpdate.params.text!, /⏳ Merging…/, "the message turns pending at once");
+  assert.match(pendingUpdate.params.text!, /⏳ マージしています…/, "the message turns pending at once");
   assert.deepEqual(actionIds(pendingUpdate.params.blocks!).filter((id) => INBOX_IDS.includes(id)), [], "with no buttons to click again");
   assert.deepEqual(repliesTo(first.response_url), [], "nothing to say while the runner works");
 
@@ -263,7 +263,7 @@ try {
     "the second approval is a new intent, and the double click on the restored buttons records it once",
   );
   assert.deepEqual([...repliesTo(retryA.response_url), ...repliesTo(retryB.response_url)], [], "merged: nothing to say, the notifier resolves it");
-  assert.match(updatesOf(red.ts).at(-1)!.params.text!, /⏳ Merging…/, "and the message stays pending");
+  assert.match(updatesOf(red.ts).at(-1)!.params.text!, /⏳ マージしています…/, "and the message stays pending");
 
   // --- request changes: a modal, then the panel's request_changes intent
   const changes = await item("C", { stage: "pr", pr_url: "https://github.com/o/r/pull/3", merge_decision: decision() });
@@ -276,7 +276,7 @@ try {
   const loading = JSON.parse(viewCall.params.view!) as { submit?: unknown; title: { text: string } };
   assert.match(JSON.stringify(loading), new RegExp(LOADING), "a loading view");
   assert.equal(loading.submit, undefined, "with nothing to submit");
-  assert.equal(loading.title.text, "Request changes");
+  assert.equal(loading.title.text, "修正を依頼");
   await drain();
   const updateCall = calls.filter((c) => c.method === "views.update").at(-1)!;
   assert.equal(updateCall.params.view_id, `V${calls.indexOf(viewCall) + 1}`, "the opened view is filled in");
@@ -298,7 +298,7 @@ try {
     actor: OWNER,
     body: "Rename the flag.",
   });
-  assert.match(updatesOf(changes.ts)[0]!.params.text!, /Sending your changes/);
+  assert.match(updatesOf(changes.ts)[0]!.params.text!, /修正依頼を送っています/);
 
   // --- answer: a modal, then the answer in the source and the answer intent
   const question = await item("Q", { stage: "waiting", question: "Postgres or SQLite?" });
@@ -313,7 +313,7 @@ try {
   assert.deepEqual(replies.map((r) => [r.job.key, r.requestId, r.body]), [[`${prefix}-Q`, slackRequestId(question.eventId, "answer"), "Postgres."]], "posted in the source as the panel does");
   const [answerIntent] = await intentsFor(question.id);
   assert.equal(answerIntent!.id, `panel:answer:${slackRequestId(question.eventId, "answer")}`);
-  assert.match(updatesOf(question.ts)[0]!.params.text!, /Answer sent/);
+  assert.match(updatesOf(question.ts)[0]!.params.text!, /回答を送信しました/);
 
   // --- an error says why, without secrets, and puts the buttons back
   const leaky = await item("L", { stage: "waiting", question: "Which key?" });
@@ -344,7 +344,7 @@ try {
   const [retryIntent] = await intentsFor(retried.id);
   assert.equal(retryIntent!.id, `panel:retry_job:${slackRequestId(retried.eventId, "retry")}`);
   assert.deepEqual([retryIntent!.kind, JSON.parse(retryIntent!.detail!)], ["retry_job", { actor: OWNER, attempt: 1, note: "Use the staging key." }]);
-  assert.match(updatesOf(retried.ts)[0]!.params.text!, /Retrying/);
+  assert.match(updatesOf(retried.ts)[0]!.params.text!, /再試行しています/);
 
   // --- dismiss acts at once
   const failed = await item("F", { stage: "failed", stage_summary: "Tests failed." });
@@ -353,7 +353,7 @@ try {
   await drain();
   const [dismissed] = await db.select().from(jobs).where(eq(jobs.id, failed.id as JobRow["id"]));
   assert.ok(dismissed!.dismissed_at, "dismissed through the panel's action");
-  assert.match(updatesOf(failed.ts)[0]!.params.text!, /Dismissed/);
+  assert.match(updatesOf(failed.ts)[0]!.params.text!, /見送りました/);
 
   // --- a stale button on a resolved item does nothing
   const again = click(failed.eventId, SLACK_ACTION_IDS.dismiss);
@@ -369,7 +369,7 @@ try {
   assert.equal(resolvedView.submit, undefined, "with nothing to submit");
   assert.deepEqual(repliesTo(stale.response_url), []);
   const staleSubmit = await submit({ callback_id: SLACK_ACTION_IDS.request_changes, private_metadata: JSON.stringify({ event: hand.eventId, responseUrl: `${base}/response/stale` }) }, "Too late.");
-  assert.match(JSON.stringify(await staleSubmit.json()), /already resolved/, "a modal left open on a resolved item");
+  assert.match(JSON.stringify(await staleSubmit.json()), /すでに解決済み/, "a modal left open on a resolved item");
   await drain();
   assert.equal((await intentsFor(hand.id)).length, 1, "still only the one approval");
   assert.equal(filed.length, 0);

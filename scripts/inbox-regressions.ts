@@ -98,7 +98,7 @@ assert.ok(allows("failed", "retry") && !allows("handover", "retry") && !allows("
 assert.ok(allows("question", "answer") && !allows("question", "approve") && !allows(null, "dismiss"));
 
 assert.deepEqual(approvalBlockers({ checks: "success", mergeable: "mergeable" }), [], "green and clean: nothing blocks");
-assert.deepEqual(approvalBlockers({ checks: "failure", mergeable: "conflicting" }), ["A check failed on the latest commit.", "The pull request conflicts with its base branch."]);
+assert.deepEqual(approvalBlockers({ checks: "failure", mergeable: "conflicting" }), ["最新のコミットでチェックが失敗しました。", "プルリクエストがベースブランチとコンフリクトしています。"]);
 assert.deepEqual(approvalBlockers({ checks: "pending", mergeable: "unknown" }).length, 2, "running checks and unknown mergeability are facts too");
 assert.deepEqual(approvalBlockers({ checks: "none", mergeable: "mergeable" }), [], "a repo without CI has no checks to wait for");
 assert.deepEqual(
@@ -135,12 +135,12 @@ const followUp = followUpIssue(
   decision({ merged, watch: watch("revert_failed") }),
   " Fix the flaky import. ",
 );
-assert.equal(followUp.title, "Fix main: revert of FAC-9 failed");
-assert.match(followUp.description, /^Fix the flaky import\.\n\n---\n\nMain went red after the factory merged FAC-9 \(https:\/\/github\.com\/o\/r\/pull\/9\), and the automatic revert failed\./);
-for (const fact of ["- Failed checks on main: ci", "- Merged pull request: https://github.com/o/r/pull/9", "- Why the revert failed: git revert failed", "- Original issue: https://linear.app/x/issue/FAC-9"]) {
+assert.equal(followUp.title, "main の修正: FAC-9 のリバートが失敗");
+assert.match(followUp.description, /^Fix the flaky import\.\n\n---\n\nファクトリーが FAC-9 \(https:\/\/github\.com\/o\/r\/pull\/9\) をマージした後に main が赤くなり、自動リバートも失敗しました。/);
+for (const fact of ["- main で失敗したチェック: ci", "- マージしたプルリクエスト: https://github.com/o/r/pull/9", "- リバートが失敗した理由: git revert failed", "- 元のイシュー: https://linear.app/x/issue/FAC-9"]) {
   assert.ok(followUp.description.includes(fact), `the follow-up carries "${fact}"`);
 }
-assert.equal(followUpHint({ key: "FAC-9" }, decision({ merged, watch: watch("revert_failed") })), "Get main green again after FAC-9: ci failed.");
+assert.equal(followUpHint({ key: "FAC-9" }, decision({ merged, watch: watch("revert_failed") })), "FAC-9 のマージ後に main をグリーンに戻す（失敗したチェック: ci）。");
 
 const framed = changesMessage({ prUrl: "https://github.com/o/r/pull/1", feedback: { from: "panel", id: "panel:1", actor: OWNER, body: "Use the existing hook." } });
 assert.equal(framed, `The reviewer requested changes on https://github.com/o/r/pull/1:\n\n> Use the existing hook.\n\nUpdate the same branch and PR, then report the PR again with a fresh assessment.\n\n${OWNER_LANGUAGE}`);
@@ -338,7 +338,7 @@ try {
   assert.deepEqual(await approveMerge((await row(BEHIND)).id, { actor: OWNER, headSha: "h42", via: "inbox" }), { merged: "merge-42" }, "a branch behind its base does not block the owner; GitHub refuses when protection requires it up to date");
 
   const RED = await job("RED", {}, { number: 2, checks: "failure", behind: 3 });
-  assert.deepEqual(await approveMerge((await row(RED)).id, { actor: OWNER, headSha: null, via: "inbox" }), { blocked: "A check failed on the latest commit." });
+  assert.deepEqual(await approveMerge((await row(RED)).id, { actor: OWNER, headSha: null, via: "inbox" }), { blocked: "最新のコミットでチェックが失敗しました。" });
   assert.equal(putsTo(2).length, 0, "facts block before GitHub is asked to merge");
   const MOVED = await job("MOVED", {}, { number: 3 });
   assert.deepEqual(await approveMerge((await row(MOVED)).id, { actor: OWNER, headSha: "old", via: "inbox" }), {
@@ -347,7 +347,7 @@ try {
   assert.equal(putsTo(3).length, 0);
   const DENIED = await job("DENIED", {}, { number: 4, merge: { status: 403, body: { message: "Resource not accessible by integration" } } });
   assert.deepEqual(await approveMerge((await row(DENIED)).id, { actor: OWNER, headSha: "h4", via: "inbox" }), {
-    blocked: "The factory's GitHub App can't merge in this repo: Resource not accessible by integration",
+    blocked: "ファクトリーの GitHub App はこのリポジトリでマージできません: Resource not accessible by integration",
   });
   assert.equal((await row(DENIED)).merge_decision!.blocked, "Resource not accessible by integration", "a refusal is recorded like auto-merge's");
   assert.equal((await row(DENIED)).stage, "pr");
@@ -424,7 +424,7 @@ try {
   assert.equal(sent[0]!.message, changesMessage({ prUrl: prUrl(5), feedback }), "framed for the thread");
   const changed = await row(CHANGE);
   assert.equal(changed.stage, "implementing", "the job goes back to implementing");
-  assert.match(changed.stage_summary!, /owner@example\.com requested changes on/);
+  assert.match(changed.stage_summary!, /owner@example\.com が .* に修正を依頼しました。/);
   assert.equal(inboxKind(changed), null, "and leaves the inbox");
   assert.deepEqual(await requestChanges(changeId, feedback), { skipped: "already sent" }, "a replayed intent sends nothing");
   assert.equal(sent.length, 1);
@@ -527,14 +527,14 @@ try {
   assert.deepEqual(await closeJob(closeId, { actor: OWNER, reason: "Not needed" }), { closed: CLOSE, pr: "closed" });
   assert.deepEqual(writes.filter((w) => w.method === "PATCH" && w.path === `/repos/${REPO}/pulls/8`).map((w) => w.body), [{ state: "closed" }]);
   const closed = await row(CLOSE);
-  assert.deepEqual([closed.stage, closed.stage_summary], ["failed", "Closed in the inbox by owner@example.com: Not needed."]);
+  assert.deepEqual([closed.stage, closed.stage_summary], ["failed", "owner@example.com がインボックスでクローズしました: Not needed。"]);
   assert.ok(closed.stop_event_id, "the thread is told to stop, as for a stop");
   assert.equal(closed.stop_sent_to, `thread-${CLOSE}`);
   assert.match(sent.at(-1)!.message, /^Stop working on INBCLOSE/);
   assert.equal(inboxKind(closed), null, "a closed job does not come back as a failure");
   assert.deepEqual(await closeJob(closeId, { actor: OWNER, reason: "" }), { closed: CLOSE, pr: "already closed" }, "a replay closes nothing twice");
 
-  const FAILED = await job("FAILED", { stage: "failed", stage_summary: "Watchdog stopped this run." });
+  const FAILED = await job("FAILED", { stage: "failed", stage_summary: "ウォッチドッグがこの実行を止めました。" });
   const failedId = (await row(FAILED)).id;
   assert.equal(inboxKind(await row(FAILED)), "failed");
   assert.deepEqual(await inbox.dismissJob(deps(), failedId), { ok: true, intentId: null });
@@ -565,8 +565,8 @@ try {
   assert.equal(filed.length, 1);
   const draft = filed[0]!;
   assert.equal(draft.requestId, id4, "the request id keys the issue, so a retry files it once");
-  assert.equal(draft.title, `Fix main: revert of ${REVERTED} failed`);
-  for (const fact of ["Pin the import order.", "- Failed checks on main: ci", `- Merged pull request: ${prUrl(16)}`, "- Why the revert failed: git revert failed", "- Revert pull request: https://github.com/o/r/pull/90"]) {
+  assert.equal(draft.title, `main の修正: ${REVERTED} のリバートが失敗`);
+  for (const fact of ["Pin the import order.", "- main で失敗したチェック: ci", `- マージしたプルリクエスト: ${prUrl(16)}`, "- リバートが失敗した理由: git revert failed", "- リバートのプルリクエスト: https://github.com/o/r/pull/90"]) {
     assert.ok(draft.description.includes(fact), `the issue carries "${fact}"`);
   }
   assert.deepEqual(draft.labels, [{ group: "Harness", name: "Claude Code" }, { group: "Runs on", name: "Cloud" }], "with the original job's overrides");

@@ -65,14 +65,14 @@ async function deliver(job: Job, feedback: FeedbackDetail): Promise<ChangesResul
   }
   if (mode !== "move") return { sent: job.key, moved: false };
   // The thread has the feedback now; if this event fails, its own reports still move the board.
-  const who = feedback.from === "github" ? `@${feedback.reviewer} on GitHub` : feedback.actor;
+  const who = feedback.from === "github" ? `GitHub の @${feedback.reviewer}` : feedback.actor;
   await postEvent({
     eventId: runnerEventId("changes", job.external_id, feedback.id),
     sessionId: job.session_id ?? runnerEventId("changes", job.external_id),
     at: Date.now(),
     kind: "stage",
     stage: "implementing",
-    summary: `${who} requested changes on ${job.pr_url}; the thread is updating it.`,
+    summary: `${who} が ${job.pr_url} に修正を依頼しました。スレッドが更新しています。`,
     jobKey: job.key,
   });
   return { sent: job.key, moved: true };
@@ -163,7 +163,7 @@ export async function closeJob(id: JobId, { actor, reason }: CloseDetail, now = 
       return { closed: job.key, pr };
     }
     const eventId = runnerEventId("stop", job.external_id, job.attempt, "closed", job.stage_event_id ?? job.stage);
-    const summary = `Closed in the inbox by ${actor}${reason.trim() ? `: ${reason.trim()}` : ""}.`;
+    const summary = `${actor} がインボックスでクローズしました${reason.trim() ? `: ${reason.trim()}` : ""}。`;
     const [stopped] = await db
       .update(jobs)
       .set({
