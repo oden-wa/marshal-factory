@@ -86,7 +86,7 @@ export async function revertMerge(prUrl: string, merged: FactoryMerge, failed: r
         head: branch,
         base: merged.base,
         body: [
-          `ファクトリーが #${number}（${merged.sha.slice(0, 7)}）をマージした後に main が赤くなりました。`,
+          `ファクトリーが #${number}（${merged.sha.slice(0, 7)}）をマージした後に ${merged.base} が赤くなりました。`,
           `失敗したチェック:\n\n${failed.map((f) => `- ${f}`).join("\n") || "- チェックの失敗"}`,
           "ファクトリーがリバートしました。",
         ].join("\n\n"),

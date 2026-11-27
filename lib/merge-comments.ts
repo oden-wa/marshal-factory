@@ -26,13 +26,14 @@ function assessmentBlock(assessment: MergeAssessment | null) {
   ];
 }
 
-function watchLine({ watch }: MergeDecision) {
+function watchLine({ watch, merged }: MergeDecision) {
   if (!watch) return "";
+  const base = merged?.base ?? "main";
   switch (watch.state) {
     case "reverted":
-      return `main が赤くなった（${failedList(watch.failed)}）ため、${watch.revertPr} でリバートしました。`;
+      return `${base} が赤くなった（${failedList(watch.failed)}）ため、${watch.revertPr} でリバートしました。`;
     case "revert_failed":
-      return `マージ後に main が赤くなり（${failedList(watch.failed)}）、リバートにも失敗しました: ${watch.reason}`;
+      return `マージ後に ${base} が赤くなり（${failedList(watch.failed)}）、リバートにも失敗しました: ${watch.reason}`;
     case "watching":
     case "green":
     case "expired":
@@ -80,9 +81,10 @@ export function prCommentBody(decision: MergeDecision, assessment: MergeAssessme
 export function sourceCommentBody(decision: MergeDecision, prUrl: string): string | null {
   if (decision.merged) {
     const watch = decision.watch;
-    if (watch?.state === "reverted") return `リバートしました: マージ後に main が赤くなりました — ${failedList(watch.failed)}。リバート: ${watch.revertPr}`;
+    const base = decision.merged.base;
+    if (watch?.state === "reverted") return `リバートしました: マージ後に ${base} が赤くなりました — ${failedList(watch.failed)}。リバート: ${watch.revertPr}`;
     if (watch?.state === "revert_failed") {
-      return `ファクトリーが ${prUrl} をマージした後に main が赤くなりました — ${failedList(watch.failed)}。リバートに失敗したため、手動でリバートしてください: ${watch.reason}`;
+      return `ファクトリーが ${prUrl} をマージした後に ${base} が赤くなりました — ${failedList(watch.failed)}。リバートに失敗したため、手動でリバートしてください: ${watch.reason}`;
     }
     return `ファクトリーがマージしました: ${prUrl}`;
   }
