@@ -25,6 +25,7 @@ const { hosts, localHost } = await import("../lib/host");
 const { github, pullsClient } = await import("../lib/github/pulls");
 const { writeRepoAutonomy } = await import("../lib/settings");
 const { allows, approveDetailSchema, changesMessage, feedbackDetailSchema, followUpHint, followUpIssue, inboxItems, inboxKind, isDismissed } = await import("../lib/inbox");
+const { OWNER_LANGUAGE } = await import("../lib/owner-language");
 const { approvalBlockers, reviewSummary } = await import("../lib/merge-decision");
 const { githubIntent } = await import("../lib/webhooks");
 const inbox = await import("../lib/inbox-actions");
@@ -142,7 +143,7 @@ for (const fact of ["- main で失敗したチェック: ci", "- マージした
 assert.equal(followUpHint({ key: "FAC-9" }, decision({ merged, watch: watch("revert_failed") })), "FAC-9 のマージ後に main をグリーンに戻す（失敗したチェック: ci）。");
 
 const framed = changesMessage({ prUrl: "https://github.com/o/r/pull/1", feedback: { from: "panel", id: "panel:1", actor: OWNER, body: "Use the existing hook." } });
-assert.match(framed, /^The reviewer requested changes on https:\/\/github\.com\/o\/r\/pull\/1:\n\n> Use the existing hook\.\n\nUpdate the same branch and PR, then report the PR again with a fresh assessment\.$/);
+assert.equal(framed, `The reviewer requested changes on https://github.com/o/r/pull/1:\n\n> Use the existing hook.\n\nUpdate the same branch and PR, then report the PR again with a fresh assessment.\n\n${OWNER_LANGUAGE}`);
 
 // --- fake GitHub
 type Pull = { repo: string; number: number; head: string; state: "open" | "closed"; merged: string | null; mergeable: boolean; behind: number; checks: string; files: { filename: string; additions: number; deletions: number; patch?: string }[]; merge: { status: number; body: unknown } };

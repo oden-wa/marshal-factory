@@ -11,6 +11,7 @@ No human reads this thread while it runs. The factory reads one file when the th
 - **Never ask in the thread.** Nobody answers. Decide, note the decision in the PR body, and go on.
 - **Never invent secret values.** When a check needs an env var you do not have, name it in the recipe's `env` with what it is for. Do not put a value, a placeholder token or a fake key anywhere: not in the recipe, a file, a commit, the PR or the result.
 - **Change nothing but the recipe.** Commit only `.factory/setup.json`. Do not fix the repo's code, tests or CI, even when a check fails; report it instead.
+- **Write for the owner in Japanese.** The PR body, the result's `summary`, each check's `note` and a `failed` reason are Japanese. Keep the commit message and PR title below as they are, and commands, paths, env var names and identifiers as they are.
 - **Never merge.** Open the PR and stop. Never push to `main`.
 
 ## Read the repo

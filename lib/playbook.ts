@@ -1,6 +1,7 @@
 import { join } from "node:path";
 import type { Execution } from "./execution";
 import type { JobHost } from "./host";
+import { OWNER_LANGUAGE } from "./owner-language";
 import { checkoutPlaybooks, SANDBOX_PLAYBOOKS } from "./sandbox";
 
 // The factory playbook ships with the factory, not with the target repo: a sandbox image holds it
@@ -44,6 +45,8 @@ export function playbookSection(execution: Execution, repoCopy: boolean) {
     "## Factory playbook",
     "",
     `The factory playbook is ${path}. Read it before anything else and follow it. It lives outside this repository and extends PStack's bundled playbooks the way a project playbook under .agents/playbooks/ does: copy the bundled steps, then apply its changes.`,
+    "",
+    OWNER_LANGUAGE,
     ...(repoCopy
       ? [
           "",
